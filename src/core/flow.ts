@@ -334,6 +334,8 @@ export function reduce(s: State, a: Action): State {
       case 'CATEGORY':
         return {
           ...(s.flow === 'V5-M1' ? visit(s, 'V5-05') : goto(s, 'V5-05')),
+          // Inline filters update the list without starting a new screen visit.
+          revision: s.flow === 'V5-M1' ? s.revision + 1 : s.revision,
           category: a.value,
           menuLimit: 5,
           query: '',

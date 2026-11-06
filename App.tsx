@@ -22,6 +22,7 @@ import {
 import { titles, topLabels } from './src/ui/content';
 import {
   CartBar,
+  ChoiceInput,
   Icon,
   InfoRow,
   NavigationRow,
@@ -70,6 +71,7 @@ export default function App() {
   const { alert, dialog } = useAppDialog(theme);
   const heading = useRef<React.ComponentRef<typeof Text>>(null);
   const scroll = useRef<React.ComponentRef<typeof ScrollView>>(null);
+  const previousScreen = useRef({ flow: s.flow, revision: s.revision });
   const store = s.stores.find(
     x => x.id === (s.flow === 'V5-03' ? s.selectedStoreId : s.storeId),
   );
@@ -121,14 +123,18 @@ export default function App() {
   const discover = () => d({ type: 'DISCOVER', demo: s.discovery === 'demo' });
   const add = () => d({ type: 'ADD', id: key() });
   useEffect(() => {
+    const previous = previousScreen.current;
+    previousScreen.current = { flow: s.flow, revision: s.revision };
+    const sameVisit = previous.revision === s.revision;
+    const inlineMenuUpdate = previous.flow === 'V5-05c' && s.flow === 'V5-05';
+    const pickupReady = previous.flow === 'V5-11' && s.flow === 'V5-12';
+    if (sameVisit && (inlineMenuUpdate || pickupReady)) return;
+
     scroll.current?.scrollTo({ y: 0, animated: false });
-    const timer = setTimeout(() => {
-      const titleNode = heading.current as unknown as HTMLElement | null;
-      titleNode?.setAttribute('tabindex', '-1');
-      titleNode?.focus({ preventScroll: true });
-      app.speak(title);
-    }, 200);
-    return () => clearTimeout(timer);
+    const titleNode = heading.current as unknown as HTMLElement | null;
+    titleNode?.setAttribute('tabindex', '-1');
+    titleNode?.focus({ preventScroll: true });
+    app.speak(title);
   }, [s.flow, s.revision]);
   useEffect(() => {
     if (s.error === 'CHANGE_STORE')
@@ -225,7 +231,7 @@ export default function App() {
           key={g.id}
           style={st.stack}
           accessibilityRole="radiogroup"
-          accessibilityLabel={g.name}
+          accessibilityLabel={`${g.name} · ${g.required ? '필수' : '선택 사항'}`}
         >
           {sectionLabel(
             `${g.name} · ${g.required ? '꼭 골라 주세요' : '안 골라도 돼요'}`,
@@ -239,6 +245,7 @@ export default function App() {
             return (
               <OptionRow
                 key={c.id}
+                name={`option-${g.id}`}
                 label={temperature ? c.id.toUpperCase() : c.name}
                 detail={temperature ? c.name : `+${money(c.price)}`}
                 selected={s.selected[g.id] === c.id}
@@ -300,6 +307,7 @@ export default function App() {
     </Card>
   );
   let body: React.ReactNode;
+  let searchStatus = '';
   let primary: ActionButton | undefined;
   let secondary: ActionButton[] = [];
   switch (s.flow) {
@@ -526,6 +534,11 @@ export default function App() {
       const list = (nearby ? s.found : s.stores).filter(x =>
         x.name.includes(s.query.trim()),
       );
+      if (s.query.trim()) {
+        searchStatus = list.length
+          ? `매장 검색 결과 ${list.length}곳`
+          : '일치하는 매장이 없어요.';
+      }
       body = (
         <>
           {nearby &&
@@ -703,6 +716,11 @@ export default function App() {
         .sort(
           (a, b) => Number(Boolean(b.popular)) - Number(Boolean(a.popular)),
         );
+      if (query) {
+        searchStatus = items.length
+          ? `메뉴 검색 결과 ${items.length}개`
+          : '일치하는 메뉴가 없어요. 다른 이름으로 찾아 주세요.';
+      }
       const last = s.history[s.storeId!];
       const recent = frequent(last, s.products);
       body = (
@@ -739,15 +757,12 @@ export default function App() {
           {!query &&
             categories.length > 0 &&
             (categories.length <= 3 ? (
-              <View accessibilityRole="tablist" style={st.row}>
+              <View accessibilityRole="radiogroup" accessibilityLabel="메뉴 분류" style={st.row}>
                 {categories.map(c => {
                   const selected = c === s.category;
                   return (
-                    <Pressable
+                    <View
                       key={c}
-                      accessibilityRole="tab"
-                      aria-selected={selected}
-                      onPress={() => d({ type: 'CATEGORY', value: c })}
                       style={{
                         flex: 1,
                         minHeight: 56,
@@ -760,6 +775,7 @@ export default function App() {
                       }}
                     >
                       <T
+                        aria-hidden
                         style={{
                           textAlign: 'center',
                           fontWeight: '700',
@@ -769,7 +785,13 @@ export default function App() {
                       >
                         {c}
                       </T>
-                    </Pressable>
+                      <ChoiceInput
+                        name="menu-category"
+                        label={c}
+                        selected={selected}
+                        onChange={() => d({ type: 'CATEGORY', value: c })}
+                      />
+                    </View>
                   );
                 })}
               </View>
@@ -1341,11 +1363,16 @@ export default function App() {
       : s.flow === 'V5-10' || s.flow === 'V5-12'
       ? 'check'
       : undefined;
+  const screenMessage =
+    s.flow === 'P02-V' || s.flow === 'V5-05c' ? '' : s.message;
   return (
     <ThemeContext.Provider value={theme}>
       <div className="app-frame" style={{ backgroundColor: theme.bg }}>
         <div className="visually-hidden" role="alert">
           {s.error !== 'CHANGE_STORE' ? s.error : ''}
+        </div>
+        <div className="visually-hidden" role="status">
+          {searchStatus || screenMessage}
         </div>
         <View style={[st.header, { minHeight: progress ? 56 : 44 }]}>
           {!['BOOT', 'V5-O1', 'V5-01'].includes(s.flow) && (
@@ -1458,9 +1485,7 @@ export default function App() {
               </View>
             )}
           {body}
-          {!!s.message && s.flow !== 'P02-V' && s.flow !== 'V5-05c' && (
-            <T aria-live="polite">{s.message}</T>
-          )}
+          {!!screenMessage && <T>{screenMessage}</T>}
           {!pinSecondary &&
             secondary.map((b, i) => (
               <Button

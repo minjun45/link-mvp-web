@@ -189,12 +189,37 @@ export function NavigationRow({
   );
 }
 
+export function ChoiceInput({
+  name,
+  label,
+  selected,
+  onChange,
+}: {
+  name: string;
+  label: string;
+  selected: boolean;
+  onChange: () => void;
+}) {
+  return (
+    <input
+      className="choice-input"
+      type="radio"
+      name={name}
+      aria-label={label}
+      checked={selected}
+      onChange={onChange}
+    />
+  );
+}
+
 export function OptionRow({
+  name,
   label,
   detail,
   selected,
   onPress,
 }: {
+  name: string;
   label: string;
   detail?: string;
   selected: boolean;
@@ -202,22 +227,18 @@ export function OptionRow({
 }) {
   const theme = useContext(ThemeContext);
   return (
-    <Pressable
-      accessibilityRole="radio"
-      accessibilityLabel={[label, detail].filter(Boolean).join(', ')}
-      aria-checked={selected}
-      onPress={onPress}
-      style={({ pressed }) => [
+    <View
+      style={[
         styles.navRow,
         {
           backgroundColor: selected ? theme.selected : theme.card,
           borderColor: selected ? theme.text : theme.line,
           borderWidth: selected || theme.contrast ? 2 : 0,
-          opacity: pressed ? 0.7 : 1,
         },
       ]}
     >
       <View
+        aria-hidden
         style={[
           styles.radio,
           { borderColor: selected ? theme.text : theme.line },
@@ -227,7 +248,7 @@ export function OptionRow({
           <View style={[styles.dot, { backgroundColor: theme.text }]} />
         )}
       </View>
-      <View style={styles.copy}>
+      <View aria-hidden style={styles.copy}>
         <T
           style={{
             fontSize: 21 * theme.scale,
@@ -243,7 +264,13 @@ export function OptionRow({
           </T>
         )}
       </View>
-    </Pressable>
+      <ChoiceInput
+        name={name}
+        label={[label, detail].filter(Boolean).join(', ')}
+        selected={selected}
+        onChange={onPress}
+      />
+    </View>
   );
 }
 
