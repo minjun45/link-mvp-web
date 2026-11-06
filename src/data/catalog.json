@@ -1,0 +1,368 @@
+{
+  "stores": [
+    {
+      "id": "kaist",
+      "name": "카페 링크 KAIST점",
+      "address": "서울 동대문구 회기로 85 · 1층",
+      "hours": "평일 09:00–21:00",
+      "beaconName": "LINK-KAIST",
+      "description": "입구에서 오른쪽에 주문·픽업 카운터가 있어요.",
+      "open": true
+    },
+    {
+      "id": "neighbor",
+      "name": "카페 이음",
+      "address": "서울 동대문구 회기로 87 · 1층",
+      "hours": "매일 10:00–20:00",
+      "beaconName": "LINK-IEUM",
+      "description": "출입문 맞은편이 픽업 카운터예요.",
+      "open": true
+    },
+    {
+      "id": "closed",
+      "name": "링크 베이커리",
+      "address": "서울 동대문구 회기로 91",
+      "hours": "오늘 주문 마감",
+      "beaconName": "LINK-BAKERY",
+      "description": "오늘은 모바일 주문을 받지 않아요.",
+      "open": false
+    }
+  ],
+  "menu": [
+    {
+      "id": "americano",
+      "name": "아메리카노",
+      "category": "커피",
+      "price": 2500,
+      "description": "고소하고 깔끔한 에스프레소 커피",
+      "note": "카페인 함유",
+      "art": "coffee",
+      "popular": true,
+      "soldOut": false,
+      "options": [
+        {
+          "id": "temperature",
+          "name": "온도",
+          "required": true,
+          "choices": [
+            {
+              "id": "ice",
+              "name": "아이스",
+              "price": 0
+            },
+            {
+              "id": "hot",
+              "name": "따뜻하게",
+              "price": 0
+            }
+          ]
+        },
+        {
+          "id": "size",
+          "name": "크기",
+          "required": true,
+          "choices": [
+            {
+              "id": "regular",
+              "name": "기본",
+              "price": 0
+            },
+            {
+              "id": "large",
+              "name": "라지",
+              "price": 500
+            }
+          ]
+        },
+        {
+          "id": "shot",
+          "name": "샷 추가",
+          "required": false,
+          "choices": [
+            {
+              "id": "none",
+              "name": "추가 안 함",
+              "price": 0
+            },
+            {
+              "id": "extra",
+              "name": "1샷 추가",
+              "price": 500
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "latte",
+      "name": "카페라테",
+      "category": "커피",
+      "price": 3500,
+      "description": "진한 에스프레소에 부드러운 우유",
+      "note": "우유 · 카페인 함유",
+      "art": "latte",
+      "popular": true,
+      "soldOut": false,
+      "options": [
+        {
+          "id": "temperature",
+          "name": "온도",
+          "required": true,
+          "choices": [
+            {
+              "id": "ice",
+              "name": "아이스",
+              "price": 0
+            },
+            {
+              "id": "hot",
+              "name": "따뜻하게",
+              "price": 0
+            }
+          ]
+        },
+        {
+          "id": "size",
+          "name": "크기",
+          "required": true,
+          "choices": [
+            {
+              "id": "regular",
+              "name": "기본",
+              "price": 0
+            },
+            {
+              "id": "large",
+              "name": "라지",
+              "price": 500
+            }
+          ]
+        },
+        {
+          "id": "shot",
+          "name": "샷 추가",
+          "required": false,
+          "choices": [
+            {
+              "id": "none",
+              "name": "추가 안 함",
+              "price": 0
+            },
+            {
+              "id": "extra",
+              "name": "1샷 추가",
+              "price": 500
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "vanilla",
+      "name": "바닐라라테",
+      "category": "커피",
+      "price": 4000,
+      "description": "달콤한 바닐라와 우유의 조화",
+      "note": "우유 · 카페인 함유",
+      "art": "latte",
+      "soldOut": false,
+      "options": [
+        {
+          "id": "temperature",
+          "name": "온도",
+          "required": true,
+          "choices": [
+            {
+              "id": "ice",
+              "name": "아이스",
+              "price": 0
+            },
+            {
+              "id": "hot",
+              "name": "따뜻하게",
+              "price": 0
+            }
+          ]
+        },
+        {
+          "id": "size",
+          "name": "크기",
+          "required": true,
+          "choices": [
+            {
+              "id": "regular",
+              "name": "기본",
+              "price": 0
+            },
+            {
+              "id": "large",
+              "name": "라지",
+              "price": 500
+            }
+          ]
+        },
+        {
+          "id": "shot",
+          "name": "샷 추가",
+          "required": false,
+          "choices": [
+            {
+              "id": "none",
+              "name": "추가 안 함",
+              "price": 0
+            },
+            {
+              "id": "extra",
+              "name": "1샷 추가",
+              "price": 500
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "decaf",
+      "name": "디카페인 커피",
+      "category": "커피",
+      "price": 3000,
+      "description": "카페인을 줄인 고소한 커피",
+      "note": "소량의 카페인이 남아 있을 수 있어요",
+      "art": "coffee",
+      "soldOut": true,
+      "options": [
+        {
+          "id": "temperature",
+          "name": "온도",
+          "required": true,
+          "choices": [
+            {
+              "id": "ice",
+              "name": "아이스",
+              "price": 0
+            },
+            {
+              "id": "hot",
+              "name": "따뜻하게",
+              "price": 0
+            }
+          ]
+        },
+        {
+          "id": "size",
+          "name": "크기",
+          "required": true,
+          "choices": [
+            {
+              "id": "regular",
+              "name": "기본",
+              "price": 0
+            },
+            {
+              "id": "large",
+              "name": "라지",
+              "price": 500
+            }
+          ]
+        },
+        {
+          "id": "shot",
+          "name": "샷 추가",
+          "required": false,
+          "choices": [
+            {
+              "id": "none",
+              "name": "추가 안 함",
+              "price": 0
+            },
+            {
+              "id": "extra",
+              "name": "1샷 추가",
+              "price": 500
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "lemon",
+      "name": "레몬에이드",
+      "category": "음료",
+      "price": 4000,
+      "description": "상큼한 레몬과 시원한 탄산",
+      "note": "차가운 음료로 제공돼요",
+      "art": "lemon",
+      "popular": true,
+      "soldOut": false,
+      "options": [
+        {
+          "id": "size",
+          "name": "크기",
+          "required": true,
+          "choices": [
+            {
+              "id": "regular",
+              "name": "기본",
+              "price": 0
+            },
+            {
+              "id": "large",
+              "name": "라지",
+              "price": 500
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "tea",
+      "name": "캐모마일 티",
+      "category": "음료",
+      "price": 3000,
+      "description": "은은한 꽃향기의 편안한 허브차",
+      "note": "카페인 없음",
+      "art": "tea",
+      "soldOut": false,
+      "options": [
+        {
+          "id": "temperature",
+          "name": "온도",
+          "required": true,
+          "choices": [
+            {
+              "id": "ice",
+              "name": "아이스",
+              "price": 0
+            },
+            {
+              "id": "hot",
+              "name": "따뜻하게",
+              "price": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "cookie",
+      "name": "초콜릿 쿠키",
+      "category": "디저트",
+      "price": 2000,
+      "description": "초콜릿이 콕콕 박힌 촉촉한 쿠키",
+      "note": "밀 · 우유 · 달걀 · 대두 함유",
+      "art": "cookie",
+      "soldOut": false,
+      "options": []
+    },
+    {
+      "id": "cake",
+      "name": "바스크 치즈케이크",
+      "category": "디저트",
+      "price": 5000,
+      "description": "진하고 부드러운 한 조각",
+      "note": "우유 · 달걀 · 밀 함유",
+      "art": "cake",
+      "soldOut": false,
+      "options": []
+    }
+  ]
+}
