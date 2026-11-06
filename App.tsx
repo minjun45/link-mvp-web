@@ -167,6 +167,7 @@ export default function App() {
         placeholderTextColor={theme.muted}
         style={{
           flex: 1,
+          minWidth: 0,
           color: theme.text,
           fontFamily,
           fontSize: 19 * theme.scale,
