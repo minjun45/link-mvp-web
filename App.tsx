@@ -41,7 +41,6 @@ type ActionButton = {
   run: () => void;
   disabled?: boolean;
   neutral?: boolean;
-  nativeClick?: boolean;
 };
 export default function App() {
   const app = useApp();
@@ -360,7 +359,6 @@ export default function App() {
         label: '실제 매장 찾기',
         run: () => app.discover(false),
         disabled: !s.discoveryReady,
-        nativeClick: true,
       };
       secondary = [{ label: '데모 매장으로 진행하기', run: () => app.discover(true) }];
       break;
@@ -500,7 +498,7 @@ export default function App() {
                 ? '데모 매장 확인 중'
                 : '주변 기기 확인 중'}
             />
-            <InfoRow icon="clock" label="걸리는 시간" value={s.discovery === 'demo' ? '약 2초' : '브라우저에서 기기를 선택할 때까지'} />
+            <InfoRow icon="clock" label="걸리는 시간" value="최대 15초" />
           </Card>
         </>
       );
@@ -512,7 +510,7 @@ export default function App() {
       const findByName = { label: '매장 이름으로 찾기', run: () => nav('V5-02s') };
       body = <Card><T>{s.error}</T></Card>;
       primary = canChoose
-        ? { label: '다시 찾기', run: discover, nativeClick: true }
+        ? { label: '다시 찾기', run: discover }
         : findByName;
       secondary = canChoose ? [findByName] : [];
       break;
@@ -520,7 +518,7 @@ export default function App() {
     case 'V5-01e':
     case 'E03':
       body = subtitle('매장 입구 가까이 이동한 뒤 다시 찾아 주세요. 주문을 지원하는 매장만 찾을 수 있어요.');
-      primary = { label: '다시 찾기', run: discover, nativeClick: true };
+      primary = { label: '다시 찾기', run: discover };
       secondary = [{ label: '매장 이름으로 찾기', run: () => nav('V5-02s') }];
       break;
     case 'V5-02e': {
@@ -531,7 +529,12 @@ export default function App() {
       body = (
         <>
           {subtitle('아래 방법을 위에서부터 차례로 해 보세요.')}
-          <NavigationRow icon="radar" title="다시 찾기" description="입구 쪽으로 몇 걸음 다가간 뒤" onPress={discover} nativeClick />
+          <NavigationRow
+            icon="radar"
+            title="다시 찾기"
+            description="입구 쪽으로 몇 걸음 다가간 뒤"
+            onPress={discover}
+          />
           <NavigationRow
             icon="search"
             title="매장 이름으로 찾기"
@@ -562,7 +565,6 @@ export default function App() {
       primary = {
         label: s.flow === 'E05' ? '다른 매장 찾기' : s.storeId ? '메뉴 다시 불러오기' : '매장 다시 찾기',
         run: () => s.flow === 'E05' ? nav('V5-02s') : s.storeId ? nav('V5-04') : discover(),
-        nativeClick: s.flow === 'E04' && !s.storeId,
       };
       secondary = [{ label: '매장 이름으로 찾기', run: () => nav('V5-02s') }];
       break;
@@ -1568,7 +1570,6 @@ export default function App() {
                 label={primary.label}
                 onPress={primary.run}
                 disabled={primary.disabled}
-                nativeClick={primary.nativeClick}
               />
             ))}
           {pinSecondary &&
@@ -1646,7 +1647,6 @@ function SettingsPanel({
   const [address, setAddress] = useState(value.serverUrl);
   const [diagnosing, setDiagnosing] = useState(false);
   const [diagnosis, setDiagnosis] = useState('');
-  const bluetoothStatus = Device.getBluetoothStatus();
   const theme = React.useContext(ThemeContext);
   const toggles: [keyof Settings, string][] = [
     ['large', '큰 글씨'],
@@ -1680,15 +1680,11 @@ function SettingsPanel({
       <Button label="매장 찾기 방식 선택" onPress={chooseDiscovery} disabled={!canChooseDiscovery} />
       <Card>
         <T kind="section">BLE 기기 진단</T>
-        <InfoRow icon="store" label="브라우저" value={bluetoothStatus.browser} />
-        <InfoRow icon="card" label="HTTPS 보안 연결" value={bluetoothStatus.secure ? '사용 가능' : 'HTTPS 주소로 접속해 주세요'} />
-        <InfoRow icon="radar" label="브라우저 BLE API" value={bluetoothStatus.api ? '지원함' : '지원하지 않거나 차단됨'} />
         <T kind="small">
           매장 이름 필터 없이 브라우저가 찾을 수 있는 BLE 기기를 확인해요.
           목록에서 휴대폰을 선택하면 브라우저가 받은 이름을 보여드려요.
         </T>
         <Button
-          nativeClick
           label={diagnosing ? '브라우저에서 기기를 선택해 주세요' : '이름 필터 없이 BLE 기기 찾기'}
           disabled={diagnosing}
           onPress={async () => {
@@ -1704,7 +1700,9 @@ function SettingsPanel({
                 : `선택한 기기 이름: ${name}\n이 이름은 등록된 매장 비콘 목록에 없어요. 휴대폰의 실제 광고 이름을 ${beaconNames[0] || '등록된 매장 비콘 이름'}로 설정해 주세요.`;
               setDiagnosis(result);
             } catch (error) {
-              setDiagnosis(Device.bluetoothErrorMessage(error));
+              setDiagnosis(error instanceof DOMException && error.name === 'NotFoundError'
+                ? '기기를 선택하지 않았어요. 목록에 휴대폰이 없었다면 nRF Connect의 광고 실행 상태와 Connectable 설정을 확인해 주세요.'
+                : error instanceof Error ? error.message : 'BLE 기기 진단을 완료하지 못했어요.');
             } finally {
               setDiagnosing(false);
             }
@@ -1715,14 +1713,6 @@ function SettingsPanel({
             {diagnosis.split('\n').map((line, index) => <T key={index}>{line}</T>)}
           </View>
         )}
-        {bluetoothStatus.request && (
-          <View style={{ gap: 8 }}>
-            <T kind="small">최근 요청: {bluetoothStatus.request.phase === 'requesting' ? '브라우저 응답을 기다리는 중' : bluetoothStatus.request.phase === 'selected' ? '기기 선택 완료' : '요청 실패'}</T>
-            <T kind="small">사용자 입력 인식: {bluetoothStatus.request.userActivation === undefined ? '브라우저가 정보를 제공하지 않음' : bluetoothStatus.request.userActivation ? '인식함' : '인식하지 못함'}</T>
-            {!!bluetoothStatus.request.error && <T kind="small">원본 오류: {bluetoothStatus.request.error}</T>}
-          </View>
-        )}
-        {!bluetoothStatus.request && <T kind="small">최근 요청: 아직 Bluetooth를 요청하지 않았어요.</T>}
         <T kind="small">
           현재 등록된 비콘 이름: {beaconNames.join(', ') || '없음'}
         </T>

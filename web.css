@@ -38,16 +38,6 @@ html, body {
   padding-block: 16px;
 }
 
-.browser-action {
-  -webkit-appearance: none;
-  appearance: none;
-  touch-action: manipulation;
-}
-
-.browser-action:enabled:active {
-  opacity: 0.65 !important;
-}
-
 :focus-visible {
   outline: 3px solid #2474c5;
   outline-offset: -3px;

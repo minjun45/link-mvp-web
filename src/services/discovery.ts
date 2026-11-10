@@ -1,9 +1,9 @@
 import type { Action } from '../core/flow';
 import type { Settings, Store } from '../core/types';
 import { getStores } from './api';
-import { chooseBeacon, bluetoothErrorMessage } from '../native/browserDevice';
+import { chooseBeacon } from '../native/browserDevice';
 
-export const STORE_LOOKUP_TIMEOUT_MS = 15_000;
+export const DISCOVERY_TIMEOUT_MS = 15_000;
 export const DEMO_DISCOVERY_MS = 2_000;
 type DiscoveryAction = Extract<Action, { type: 'STORES' | 'FOUND' | 'FAIL' }>;
 type DiscoveryOptions = {
@@ -25,13 +25,7 @@ export function startDiscovery(
 ) {
   let active = true;
   let demoTimer: ReturnType<typeof setTimeout> | undefined;
-  // Bound metadata loading, not the browser's permission/device chooser. The
-  // user may need more than 15 seconds to grant OS permission and pick a device.
-  const timeout = setTimeout(() => finish({
-    type: 'FAIL',
-    flow: 'E04',
-    message: '매장 정보를 불러오는 데 시간이 걸리고 있어요. 연결을 확인한 뒤 다시 시도해 주세요.',
-  }), STORE_LOOKUP_TIMEOUT_MS);
+  const timeout = setTimeout(() => finish({ type: 'FOUND', stores: [] }), DISCOVERY_TIMEOUT_MS);
 
   function finish(action: DiscoveryAction) {
     if (!active) return;
@@ -42,10 +36,13 @@ export function startDiscovery(
   }
 
   function failed(error: unknown, flow: 'V5-01e' | 'E04') {
+    const denied = error instanceof DOMException && error.name === 'NotAllowedError';
     finish({
       type: 'FAIL',
       flow,
-      message: bluetoothErrorMessage(error),
+      message: denied
+        ? '브라우저에서 블루투스 권한을 허용한 뒤 다시 시도해 주세요.'
+        : error instanceof Error ? error.message : '매장을 찾지 못했어요. 다시 찾거나 이름으로 검색해 주세요.',
     });
   }
 
@@ -57,10 +54,7 @@ export function startDiscovery(
       failed(error, 'V5-01e');
       return undefined;
     });
-    const metadata = loadStores(settings).then(available => {
-      clearTimeout(timeout);
-      return available;
-    }).catch(error => {
+    const metadata = loadStores(settings).catch(error => {
       failed(error, 'E04');
       return [];
     });

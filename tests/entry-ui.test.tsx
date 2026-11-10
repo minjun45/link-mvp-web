@@ -13,10 +13,7 @@ vi.mock('../src/services/useApp', () => ({
     discover: vi.fn(), voiceSearch: vi.fn(), complete: vi.fn(),
   }),
 }));
-vi.mock('../src/native/browserDevice', () => ({
-  canChooseBeacon: () => true,
-  getBluetoothStatus: () => ({ browser: '삼성 인터넷 29.0', secure: true, api: true }),
-}));
+vi.mock('../src/native/browserDevice', () => ({ canChooseBeacon: () => true }));
 
 function render(flow: State['flow'], extra: Partial<State> = {}) {
   mock.state = { ...initial, stores: catalog.stores, flow, ...extra };
@@ -28,7 +25,6 @@ test('entry screen offers real discovery and demo as separate actions', () => {
   expect(html).toContain('어떻게 시작할까요?');
   expect(html).toContain('aria-label="실제 매장 찾기"');
   expect(html).toContain('aria-label="데모 매장으로 진행하기"');
-  expect(html).toMatch(/<button\b[^>]*aria-label="실제 매장 찾기"/);
 });
 
 test('both discovery modes show the scanner without a second Bluetooth search button', () => {
@@ -45,9 +41,6 @@ test('settings exposes unfiltered diagnostics separately from normal store disco
   expect(html).toContain('BLE 기기 진단');
   expect(html).toContain('aria-label="이름 필터 없이 BLE 기기 찾기"');
   expect(html).toContain('LINK-KAIST, LINK-IEUM, LINK-BAKERY');
-  expect(html).toContain('삼성 인터넷 29.0');
-  expect(html).toContain('브라우저 BLE API');
-  expect(html).toMatch(/<button\b[^>]*aria-label="이름 필터 없이 BLE 기기 찾기"/);
 });
 
 test('1103: missing-store guidance contains the three ordered recovery actions, not a search form', () => {
