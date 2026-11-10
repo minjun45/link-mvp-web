@@ -69,3 +69,15 @@ test('empty cart button reads like its visible text', () => {
   expect(html).not.toContain('aria-label="장바구니 비어 있음"');
   expect(html).toMatch(/aria-label="장바구니 보기 · 1개 · /);
 });
+
+test('menu search accepts both spellings of latte and spaces in a spoken menu name', () => {
+  for (const query of ['라떼', '라테']) {
+    const html = render('V5-05', { ...store, query });
+    expect(html).toContain('메뉴 검색 결과 2개');
+    expect(html).toContain('카페라테');
+    expect(html).toContain('바닐라라테');
+  }
+  const specific = render('V5-05', { ...store, query: '카페 라떼' });
+  expect(specific).toContain('메뉴 검색 결과 1개');
+  expect(specific).not.toContain('바닐라라테');
+});
