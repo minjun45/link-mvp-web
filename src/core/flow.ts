@@ -209,7 +209,6 @@ const backRoutes: Partial<Record<Flow, Flow>> = {
   'V5-01e': 'START',
   'V5-02e': 'V5-02',
   'V5-02s': 'V5-02e',
-  'V5-03': 'V5-02',
   'V5-04': 'V5-03',
   'V5-R1': 'V5-03',
   'V5-05': 'V5-03',
@@ -301,6 +300,9 @@ export function reduce(s: State, a: Action): State {
             backStack: s.backStack.slice(0, -1),
           };
         }
+        // A single discovery result skips the list. Without a visited screen
+        // to restore, Back returns to entry choices instead of creating a list.
+        if (s.flow === 'V5-03') return start(s);
         return goto(s, backRoutes[s.flow] || 'START');
       case 'ONBOARD_NEXT':
         return s.flow === 'V5-O1'
