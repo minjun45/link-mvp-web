@@ -1,7 +1,7 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, test, vi } from 'vitest';
-import type { State } from '../src/core/types';
+import type { Order, State } from '../src/core/types';
 import { initial } from '../src/core/flow';
 import catalog from '../src/data/catalog.json';
 import App from '../App';
@@ -86,10 +86,31 @@ test('1103: store confirmation displays wait data when provided and never invent
   expect(html.match(/data-testid="primary-action"/g)).toHaveLength(1);
 });
 
+test('footer has no shared replay button; order screens keep their own replay actions', () => {
+  const extra = { storeId: catalog.stores[0].id };
+  for (const flow of ['START', 'V5-O2', 'V5-05', 'V5-08', 'SETTINGS'] as const) {
+    const html = render(flow, extra);
+    expect(html).not.toContain('aria-label="다시 듣기"');
+    expect(html).toContain(`aria-label="${flow.startsWith('V5-O') ? '도움 요청' : '직원 도움'}"`);
+  }
+  expect(render('V5-O4')).not.toContain('맨 아래 왼쪽 다시 듣기');
+  const order: Order = {
+    id: 'o1',
+    paymentId: 'p1',
+    number: 'A-17',
+    created: 0,
+    snapshot: { storeId: catalog.stores[0].id, storeName: catalog.stores[0].name, items: [], total: 0, quantity: 0 },
+    status: 'preparing',
+    demo: true,
+  };
+  expect(render('V5-11', { order })).toContain('주문 상태 다시 듣기');
+  expect(render('V5-12', { order: { ...order, status: 'ready' } })).toContain('주문번호 다시 듣기');
+});
+
 test('store and menu search each expose one field label without a duplicate native placeholder', () => {
   for (const [flow, label] of [
     ['V5-02s', '매장 이름으로 찾기'],
-    ['V5-05', '메뉴 이름 (예: 라떼)'],
+    ['V5-05', '메뉴 이름으로 찾기'],
   ] as const) {
     const html = render(flow, { storeId: catalog.stores[0].id });
     expect(html.match(/<input\b[^>]*>/g)).toHaveLength(1);
