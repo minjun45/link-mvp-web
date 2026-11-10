@@ -124,6 +124,7 @@ export function NavigationRow({
   icon,
   photo,
   tag,
+  label,
   onPress,
   disabled,
 }: {
@@ -133,6 +134,8 @@ export function NavigationRow({
   icon?: IconName;
   photo?: boolean;
   tag?: string;
+  /** Screen-reader name when the joined visible text is not the best reading. */
+  label?: string;
   onPress: () => void;
   disabled?: boolean;
 }) {
@@ -140,10 +143,12 @@ export function NavigationRow({
   return (
     <Pressable
       accessible
-      accessibilityRole={disabled ? 'text' : 'button'}
-      accessibilityLabel={[title, description, price, tag]
-        .filter(Boolean)
-        .join(', ')}
+      // Stay a (disabled) button: with role "text" the browser drops the label
+      // and TalkBack reads only "사용할 수 없음".
+      accessibilityRole="button"
+      accessibilityLabel={
+        label || [title, description, price, tag].filter(Boolean).join(', ')
+      }
       aria-disabled={disabled}
       disabled={disabled}
       onPress={onPress}
