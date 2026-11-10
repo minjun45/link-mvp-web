@@ -160,7 +160,7 @@ export default function App() {
         () => d({ type: 'CLEAR_ERROR' }),
       );
   }, [s.error]);
-  const search = (placeholder: string) => (
+  const search = (placeholder: string, label = placeholder) => (
     <View
       style={[
         st.input,
@@ -199,7 +199,7 @@ export default function App() {
         <TextInput
           value={s.query}
           onChangeText={value => d({ type: 'QUERY', value })}
-          accessibilityLabel={placeholder}
+          accessibilityLabel={label}
           style={{
             minWidth: 0,
             color: theme.text,
@@ -260,10 +260,10 @@ export default function App() {
           key={g.id}
           style={st.stack}
           accessibilityRole="radiogroup"
-          accessibilityLabel={`${g.name} · ${g.required ? '필수' : '선택 사항'}`}
+          accessibilityLabel={`${g.name} · ${g.required ? '필수' : '선택'}`}
         >
           {sectionLabel(
-            `${g.name} · ${g.required ? '꼭 골라 주세요' : '안 골라도 돼요'}`,
+            `${g.name} · ${g.required ? '필수' : '선택'}`,
           )}
           {s.missingGroup === g.id && (
             <T style={{ color: theme.danger }}>먼저 선택해 주세요.</T>
@@ -412,9 +412,9 @@ export default function App() {
               value="다음 단계로 가기"
             />
             <InfoRow
-              icon="speaker"
+              icon="staff"
               label="맨 아래 · 늘 같은 자리"
-              value="다시 듣기 · 직원 도움"
+              value="직원 도움"
             />
           </Card>
         </>
@@ -461,11 +461,6 @@ export default function App() {
           {sectionLabel('연습이 끝나면')}
           <Card compact>
             <InfoRow icon="bag" label="성공하면" value="가벼운 진동과 안내" />
-            <InfoRow
-              icon="speaker"
-              label="다시 듣고 싶으면"
-              value="맨 아래 왼쪽 다시 듣기"
-            />
             <InfoRow
               icon="staff"
               label="나중에 또 배우려면"
@@ -717,16 +712,18 @@ export default function App() {
     case 'V5-05':
     case 'V5-05c': {
       primary = {
-        label: `장바구니 보기 · ${
-          cartQuote?.quantity || s.cart.length
-        }개 · ${money(cartQuote?.total || 0)}`,
+        label: s.cart.length
+          ? `장바구니 보기 · ${cartQuote?.quantity || s.cart.length}개 · ${money(
+              cartQuote?.total || 0,
+            )}`
+          : '장바구니 비어 있음',
         disabled: !s.cart.length,
         run: () => nav('V5-08'),
       };
       if (s.flow === 'V5-M1' && !s.query.trim()) {
         body = (
           <>
-            {search('메뉴 이름 (예: 라떼)')}
+            {search('메뉴 이름 (예: 라떼)', '메뉴 이름으로 찾기')}
             {sectionLabel(`분류 · ${categories.length}개`)}
             {categories.slice(0, s.categoryLimit).map(c => (
               <NavigationRow
@@ -770,7 +767,7 @@ export default function App() {
         <>
           {s.flow === 'V5-05c' &&
             subtitle('더 고르거나 아래 장바구니에서 결제하세요.')}
-          {search('메뉴 이름 (예: 라떼)')}
+          {search('메뉴 이름 (예: 라떼)', '메뉴 이름으로 찾기')}
           {!query && recent.length > 0 && (
             <>
               {sectionLabel(`자주 시킨 메뉴 · ${recent.length}개`)}
@@ -854,6 +851,7 @@ export default function App() {
               description={p.soldOut ? '오늘 준비 수량 소진' : p.description}
               price={p.soldOut ? undefined : money(p.price)}
               tag={p.soldOut ? '품절' : undefined}
+              label={p.soldOut ? `${p.name}, 품절` : undefined}
               disabled={p.soldOut}
               onPress={() => d({ type: 'SELECT_PRODUCT', id: p.id })}
             />
@@ -1382,10 +1380,7 @@ export default function App() {
       : `${
           store?.name ? store.name + '에서 ' : ''
         }링크 앱으로 주문하는 것을 도와주세요.`;
-    alert('직원 도움', message, [
-      { text: '안내 듣기', onPress: () => app.speak(message, true) },
-      { text: '닫기' },
-    ]);
+    helpCard(message, () => app.speak(message, true));
   };
   const topLabel =
     topLabels[s.flow] || (s.flow === 'SETTINGS' ? '설정' : '링크');
@@ -1464,13 +1459,10 @@ export default function App() {
           )}
         </View>
         {progress > 0 && (
+          // Decorative only: the "1 / 3 …" label above already announces the step,
+          // and screen readers would otherwise add a "33%" percentage.
           <View
-            accessible
-            accessibilityRole="progressbar"
-            aria-label="주문 진행 단계"
-            aria-valuemin={0}
-            aria-valuemax={3}
-            aria-valuenow={progress}
+            aria-hidden
             style={{
               marginHorizontal: 16,
               marginBottom: 12,
@@ -1535,7 +1527,9 @@ export default function App() {
               </View>
             )}
           {body}
-          {!!screenMessage && <T>{screenMessage}</T>}
+          {/* On the menu, filter messages ("음료 메뉴 2개") are announced by the
+              status region; repeating them under the list read as an extra item. */}
+          {!!screenMessage && s.flow !== 'V5-05' && <T>{screenMessage}</T>}
           {!pinSecondary &&
             secondary.map((b, i) => (
               <Button
@@ -1582,19 +1576,6 @@ export default function App() {
               />
             ))}
           <View style={[st.row, { paddingTop: entryScreen ? 12 : 3 }]}>
-            <View style={st.grow}>
-              <Button
-                appearance="utility"
-                label="다시 듣기"
-                icon={<Icon name="speaker" size={24} color={theme.text} />}
-                onPress={() =>
-                  app.speak(
-                    [title, s.error, s.message].filter(Boolean).join('. '),
-                    true,
-                  )
-                }
-              />
-            </View>
             <View style={st.grow}>
               <Button
                 appearance="utility"
@@ -1673,7 +1654,6 @@ function SettingsPanel({
         ))}
         <T kind="small">
           화면 읽기 프로그램을 사용한다면 자동 음성 안내를 끌 수 있어요.
-          ‘다시 듣기’는 지원 브라우저에서 사용할 수 있어요.
         </T>
       </Card>
       <Button label="사용법 다시 듣기" onPress={replay} />
