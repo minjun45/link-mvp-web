@@ -134,8 +134,16 @@ export default function App() {
     scroll.current?.scrollTo({ y: 0, animated: false });
     const titleNode = heading.current as unknown as HTMLElement | null;
     titleNode?.setAttribute('tabindex', '-1');
-    titleNode?.focus({ preventScroll: true });
+    // The footer button that was just pressed stays in place with a new label,
+    // so a screen reader keeps its cursor there. Release it and move focus to
+    // the title after the press has finished.
+    const timer = window.setTimeout(() => {
+      const active = document.activeElement as HTMLElement | null;
+      if (active && active !== titleNode) active.blur();
+      titleNode?.focus({ preventScroll: true });
+    }, 80);
     app.speak(title);
+    return () => window.clearTimeout(timer);
   }, [s.flow, s.revision]);
   useEffect(() => {
     if (s.error === 'CHANGE_STORE')
@@ -168,23 +176,41 @@ export default function App() {
       ]}
     >
       <Icon name="search" size={26} color={theme.text} />
-      <TextInput
-        value={s.query}
-        onChangeText={value => d({ type: 'QUERY', value })}
-        accessibilityLabel={placeholder}
-        placeholder={placeholder}
-        placeholderTextColor={theme.muted}
-        style={{
-          flex: 1,
-          minWidth: 0,
-          color: theme.text,
-          fontFamily,
-          fontSize: 19 * theme.scale,
-          padding: 0,
-          minHeight: 48,
-        }}
-        returnKeyType="search"
-      />
+      {/* The hint is drawn as hidden text, not a native placeholder, so
+          screen readers announce the field name once instead of twice. */}
+      <View style={{ flex: 1, minWidth: 0, justifyContent: 'center' }}>
+        {!s.query && (
+          <Text
+            aria-hidden
+            pointerEvents="none"
+            numberOfLines={1}
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              color: theme.muted,
+              fontFamily,
+              fontSize: 19 * theme.scale,
+            }}
+          >
+            {placeholder}
+          </Text>
+        )}
+        <TextInput
+          value={s.query}
+          onChangeText={value => d({ type: 'QUERY', value })}
+          accessibilityLabel={placeholder}
+          style={{
+            minWidth: 0,
+            color: theme.text,
+            fontFamily,
+            fontSize: 19 * theme.scale,
+            padding: 0,
+            minHeight: 48,
+          }}
+          returnKeyType="search"
+        />
+      </View>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="음성으로 검색"
@@ -588,28 +614,41 @@ export default function App() {
       break;
     }
     case 'V5-03':
+      // The store name is enough to confirm, so the order button comes right
+      // after it. Screen reader users reach it without passing every detail.
       body = store ? (
-        <Card compact>
-          <InfoRow icon="store" label="매장" value={store.name} />
-          <InfoRow icon="pin" label="주소" value={store.address} />
-          <InfoRow icon="clock" label="영업" value={store.hours} />
-          <InfoRow icon="card" label="주문" value={store.open ? '지금 휴대폰 주문 가능' : '오늘 주문 마감'} />
-          <InfoRow
-            icon="clock"
-            label="대기"
-            value={store.wait ? `앞 주문 ${store.wait.ordersAhead}건 · 약 ${store.wait.minutes}분` : '매장에서 확인해 주세요'}
+        <>
+          <T kind="section">{store.name}</T>
+          <Button
+            testID="primary-action"
+            primary
+            label="이 매장에서 주문"
+            onPress={() => d({ type: 'CONFIRM_STORE' })}
           />
-        </Card>
-      ) : <T>매장을 다시 선택해 주세요.</T>;
-      primary = {
-        label: '이 매장에서 주문',
-        run: () => d({ type: 'CONFIRM_STORE' }),
-        disabled: !store,
-      };
-      secondary = [{
-        label: '다른 매장 찾기',
-        run: () => nav(s.found.length > 1 ? 'V5-02' : 'V5-02s'),
-      }];
+          <Card compact>
+            <InfoRow icon="pin" label="주소" value={store.address} />
+            <InfoRow icon="clock" label="영업" value={store.hours} />
+            <InfoRow
+              icon="card"
+              label="주문"
+              value={store.open ? '지금 휴대폰 주문 가능' : '오늘 주문 마감'}
+            />
+            <InfoRow
+              icon="clock"
+              label="대기"
+              value={store.wait ? `앞 주문 ${store.wait.ordersAhead}건 · 약 ${store.wait.minutes}분` : '매장에서 확인해 주세요'}
+            />
+          </Card>
+        </>
+      ) : (
+        <T>매장을 다시 선택해 주세요.</T>
+      );
+      secondary = [
+        {
+          label: '다른 매장 찾기',
+          run: () => nav(s.found.length > 1 ? 'V5-02' : 'V5-02s'),
+        },
+      ];
       break;
     case 'V5-04':
       body = subtitle(`${store?.name || '매장'} · 잠시만 기다려 주세요.`);
@@ -1389,7 +1428,7 @@ export default function App() {
           {!['BOOT', 'START', 'V5-O1'].includes(s.flow) && (
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="이전 화면"
+              accessibilityLabel="뒤로"
               onPress={() => d({ type: 'BACK' })}
               style={[
                 st.chip,

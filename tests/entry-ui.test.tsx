@@ -79,4 +79,23 @@ test('1103: store confirmation displays wait data when provided and never invent
   expect(html).toContain('앞 주문 2건 · 약 5분');
   expect(html).toContain('이 매장에서 주문');
   expect(html).toContain('다른 매장 찾기');
+  // Keep the PR's short screen-reader route without losing local wait data.
+  const action = html.indexOf('aria-label="이 매장에서 주문"');
+  expect(html.indexOf(catalog.stores[0].name)).toBeLessThan(action);
+  expect(action).toBeLessThan(html.indexOf(catalog.stores[0].address));
+  expect(html.match(/data-testid="primary-action"/g)).toHaveLength(1);
+});
+
+test('store and menu search each expose one field label without a duplicate native placeholder', () => {
+  for (const [flow, label] of [
+    ['V5-02s', '매장 이름으로 찾기'],
+    ['V5-05', '메뉴 이름 (예: 라떼)'],
+  ] as const) {
+    const html = render(flow, { storeId: catalog.stores[0].id });
+    expect(html.match(/<input\b[^>]*>/g)).toHaveLength(1);
+    const input = html.match(/<input\b[^>]*>/)![0];
+    expect(input).toContain(`aria-label="${label}"`);
+    expect(input).not.toContain('placeholder=');
+    expect(html).toContain('aria-hidden="true"');
+  }
 });

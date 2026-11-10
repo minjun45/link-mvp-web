@@ -282,6 +282,13 @@ export function reduce(s: State, a: Action): State {
           if (s.step > 0) return { ...goto(s, 'V5-M3'), step: s.step - 1 };
         }
         if (s.flow === 'V5-M4') return goto({ ...s, step: 0 }, 'V5-M3');
+        // Discovery requires a new click. Return to the entry choices rather
+        // than restoring a scanner with no active Bluetooth request.
+        if (s.flow === 'V5-02' && s.discovery === 'demo')
+          return {
+            ...start(s),
+            discovery: 'ble',
+          };
         if (
           (shoppingScreens.has(s.flow) || s.flow === 'V5-04') &&
           s.backStack.length
