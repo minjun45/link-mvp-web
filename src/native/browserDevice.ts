@@ -1,5 +1,5 @@
 type BluetoothChooser = {
-  requestDevice(options: { filters: { name: string }[] }): Promise<{ name?: string }>;
+  requestDevice(options: { filters: { name: string }[] } | { acceptAllDevices: true }): Promise<{ name?: string }>;
 };
 
 type SpeechRecognition = {
@@ -23,13 +23,29 @@ export function canChooseBeacon() {
   return window.isSecureContext && typeof bluetooth()?.requestDevice === 'function';
 }
 
-export async function chooseBeacon(names: string[]) {
+function requireBluetooth() {
+  if (!window.isSecureContext)
+    throw new Error('HTTPS 또는 노트북의 http://127.0.0.1:5173/에서 열어 주세요.');
   const adapter = bluetooth();
-  if (!window.isSecureContext || !adapter || names.length === 0)
-    throw new Error('이 브라우저에서는 매장 비콘을 선택할 수 없어요.');
+  if (typeof adapter?.requestDevice !== 'function')
+    throw new Error('이 브라우저에서는 BLE 기기를 찾을 수 없어요. 노트북 Chrome에서 열어 주세요.');
+  return adapter;
+}
+
+export async function chooseBeacon(names: string[]) {
+  const adapter = requireBluetooth();
+  if (names.length === 0)
+    throw new Error('등록된 매장이 없어요. 이름으로 검색하거나 데모로 체험해 주세요.');
   const device = await adapter.requestDevice({
     filters: [...new Set(names)].map(name => ({ name })),
   });
+  return device.name;
+}
+
+// Diagnostics only: show the browser's BLE candidates without store-name
+// filtering. Read only the chosen device's name; do not connect or map it to a store.
+export async function inspectBeacon() {
+  const device = await requireBluetooth().requestDevice({ acceptAllDevices: true });
   return device.name;
 }
 

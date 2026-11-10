@@ -28,10 +28,11 @@ const order = (s: State): Order => ({
   status: 'received',
   demo: true,
 });
-test('09: first launch has four onboarding steps; skip and replay preserve completion', () => {
+test('entry choice is first; optional onboarding returns to entry choice and preserves completion', () => {
   let s = start();
-  expect(s.flow).toBe('V5-O1');
-  for (const flow of ['V5-O2', 'V5-O3', 'V5-O4', 'V5-01']) {
+  expect(s.flow).toBe('START');
+  s = reduce(s, { type: 'REPLAY_TRAINING' });
+  for (const flow of ['V5-O2', 'V5-O3', 'V5-O4', 'START']) {
     s = reduce(s, { type: 'ONBOARD_NEXT' });
     expect(s.flow).toBe(flow);
   }
@@ -43,12 +44,12 @@ test('09: first launch has four onboarding steps; skip and replay preserve compl
       stores,
       products,
     }).flow,
-  ).toBe('V5-01');
+  ).toBe('START');
   expect(reduce(start(), { type: 'ONBOARD_SKIP' }).onboarded).toBe(true);
   expect(reduce(s, { type: 'REPLAY_TRAINING' }).flow).toBe('V5-O1');
 });
 test('08: zero/one/multiple scan results and three-at-a-time lists', () => {
-  expect(reduce(menu(), { type: 'FOUND', stores: [] }).flow).toBe('E03');
+  expect(reduce(menu(), { type: 'FOUND', stores: [] }).flow).toBe('V5-01e');
   expect(reduce(menu(), { type: 'FOUND', stores: [stores[0]] }).flow).toBe(
     'V5-03',
   );
@@ -57,16 +58,19 @@ test('08: zero/one/multiple scan results and three-at-a-time lists', () => {
   expect(s.storeLimit).toBe(3);
   expect(reduce(s, { type: 'MORE_STORES' }).storeLimit).toBe(6);
 });
-test('08: back from the demo store list leaves demo mode instead of rescanning', () => {
+test('08: back from the demo store list returns to entry choices instead of rescanning', () => {
   const demo = reduce(reduce(menu(), { type: 'DISCOVER', demo: true }), {
     type: 'FOUND',
     stores,
   });
   expect(demo).toMatchObject({ flow: 'V5-02', discovery: 'demo' });
   expect(reduce(demo, { type: 'BACK' })).toMatchObject({
-    flow: 'V5-01',
+    flow: 'START',
     discovery: 'ble',
     found: [],
+    backStack: [],
+    query: '',
+    selectedStoreId: undefined,
   });
 });
 test('09: store confirmation loads menu; history offers reorder only for that store', () => {
@@ -136,7 +140,7 @@ test('09: a recent item opens the normal option screen with its saved options', 
     quantity: 1,
   });
 });
-test('09: demo pickup returns to the opening screen and can replay without losing order history', () => {
+test('pickup returns to discovery choices without losing order history', () => {
   const last = { ...order(cart()), status: 'ready' as const };
   const pickup: State = {
     ...menu(),
@@ -147,18 +151,18 @@ test('09: demo pickup returns to the opening screen and can replay without losin
   };
   const reset = reduce(pickup, { type: 'PICKUP_COMPLETE' });
   expect(reset).toMatchObject({
-    flow: 'V5-O1',
+    flow: 'START',
     onboarded: true,
     history: pickup.history,
     backStack: [],
   });
-  expect(reduce(reset, { type: 'ONBOARD_SKIP' })).toMatchObject({
+  expect(reduce(reset, { type: 'DISCOVER', demo: true })).toMatchObject({
     flow: 'V5-01',
     discovery: 'demo',
   });
   expect(
     reduce({ ...pickup, discovery: 'ble' }, { type: 'PICKUP_COMPLETE' }).flow,
-  ).toBe('V5-01');
+  ).toBe('START');
 });
 test('08: quick defaults is an opt-in path; many options use wizard and summary', () => {
   let s = reduce(

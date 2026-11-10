@@ -68,7 +68,8 @@ export default function App() {
     scale: s.settings.large ? 1.25 : 1,
     contrast: s.settings.contrast,
   };
-  const { alert, dialog } = useAppDialog(theme);
+  const { alert, helpCard, dialog } = useAppDialog(theme);
+  const entryScreen = ['START', 'V5-01', 'V5-01e', 'V5-02', 'V5-02e', 'V5-02s', 'V5-03', 'V5-04'].includes(s.flow);
   const heading = useRef<React.ComponentRef<typeof Text>>(null);
   const scroll = useRef<React.ComponentRef<typeof ScrollView>>(null);
   const previousScreen = useRef({ flow: s.flow, revision: s.revision });
@@ -120,7 +121,7 @@ export default function App() {
   const menu = () => nav(s.products.length > 20 ? 'V5-M1' : 'V5-05');
   const checkout = (reorder = false) =>
     d({ type: 'CHECKOUT', key: key(), reorder });
-  const discover = () => d({ type: 'DISCOVER', demo: s.discovery === 'demo' });
+  const discover = () => app.discover(s.discovery === 'demo');
   const add = () => d({ type: 'ADD', id: key() });
   useEffect(() => {
     const previous = previousScreen.current;
@@ -167,8 +168,10 @@ export default function App() {
         {
           backgroundColor: theme.card,
           borderColor: theme.text,
-          paddingHorizontal: 8,
+          paddingLeft: entryScreen ? 16 : 8,
+          paddingRight: 8,
           paddingVertical: 6,
+          borderWidth: entryScreen && !theme.contrast ? 0 : 2,
         },
       ]}
     >
@@ -248,7 +251,7 @@ export default function App() {
     </T>
   );
   const sectionLabel = (text: string) => (
-    <T style={{ color: theme.muted, fontWeight: '700' }}>{text}</T>
+    <T style={{ color: theme.muted, fontWeight: '700', ...(entryScreen ? { fontSize: 15 * theme.scale, lineHeight: 20 * theme.scale } : {}) }}>{text}</T>
   );
   const options = (groups: Group[]) => (
     <View style={st.stack}>
@@ -339,6 +342,25 @@ export default function App() {
   switch (s.flow) {
     case 'BOOT':
       body = <ActivityIndicator size="large" />;
+      break;
+    case 'START':
+      body = (
+        <>
+          {subtitle('실제 매장을 찾거나 데모로 먼저 체험해 보세요.')}
+          <Card compact>
+            <InfoRow icon="store" label="실제 매장 찾기" value="블루투스로 주변 매장을 찾아요" />
+            <InfoRow icon="cup" label="데모 매장으로 진행하기" value="실제 결제 없이 주문을 체험해요" />
+          </Card>
+          {!s.discoveryReady && !s.error && <T kind="small">매장 정보를 확인하고 있어요.</T>}
+          {!!s.error && <Button label="매장 정보 다시 불러오기" onPress={() => nav('START')} />}
+        </>
+      );
+      primary = {
+        label: '실제 매장 찾기',
+        run: () => app.discover(false),
+        disabled: !s.discoveryReady,
+      };
+      secondary = [{ label: '데모 매장으로 진행하기', run: () => app.discover(true) }];
       break;
     case 'V5-O1':
       body = (
@@ -467,69 +489,71 @@ export default function App() {
     case 'V5-01':
       body = (
         <>
-          {subtitle(
-            '매장 입구 근처에서 잠시 기다려 주세요. 찾으면 진동으로 알려드려요.',
-          )}
+          {subtitle('매장 입구 근처에서 잠시 기다려 주세요. 찾으면 진동으로 알려드려요.')}
           <Card compact>
-            <InfoRow icon="store" label="블루투스" value="주변 신호 확인 중" />
-            <InfoRow icon="clock" label="걸리는 시간" value="약 8초" />
+            <InfoRow
+              icon="store"
+              label="블루투스"
+              value={s.discovery === 'demo'
+                ? '데모 매장 확인 중'
+                : '주변 기기 확인 중'}
+            />
+            <InfoRow icon="clock" label="걸리는 시간" value="최대 15초" />
           </Card>
         </>
       );
-      primary = {
-        label: '찾기 멈추기',
-        neutral: true,
-        run: () => nav('V5-02e'),
-      };
-      secondary = [
-        {
-          label: '데모 매장으로 체험하기',
-          run: () => d({ type: 'DISCOVER', demo: true }),
-        },
-      ];
+      primary = { label: '찾기 멈추기', neutral: true, run: () => nav('V5-02e') };
       break;
     case 'E01':
     case 'E02': {
       const canChoose = Device.canChooseBeacon();
-      const findByName = { label: '매장 이름으로 찾기', run: () => nav('V5-02e') };
-      body = (
-        <Card>
-          <T>{s.error}</T>
-        </Card>
-      );
+      const findByName = { label: '매장 이름으로 찾기', run: () => nav('V5-02s') };
+      body = <Card><T>{s.error}</T></Card>;
       primary = canChoose
-        ? { label: '블루투스로 매장 찾기', run: app.bluetooth }
+        ? { label: '다시 찾기', run: discover }
         : findByName;
-      secondary = [
-        ...(canChoose ? [findByName] : []),
-        {
-          label: '데모로 체험하기',
-          run: () => d({ type: 'DISCOVER', demo: true }),
-        },
-      ];
+      secondary = canChoose ? [findByName] : [];
       break;
     }
+    case 'V5-01e':
     case 'E03':
-    case 'V5-02s':
-      body = (
-        <Card>
-          <T>1. 매장 입구 가까이 이동해 주세요.</T>
-          <T>2. 블루투스와 주변 기기 권한을 확인해 주세요.</T>
-          <T>3. 다시 찾거나 매장 이름으로 검색해 주세요.</T>
-          <T kind="small">
-            그래도 보이지 않으면 직원에게 링크 주문이 가능한지 물어보세요.
-          </T>
-        </Card>
-      );
-      primary = { label: '주변 매장 다시 찾기', run: discover };
-      secondary = [
-        { label: '매장 이름으로 찾기', run: () => nav('V5-02e') },
-        {
-          label: '데모로 체험하기',
-          run: () => d({ type: 'DISCOVER', demo: true }),
-        },
-      ];
+      body = subtitle('매장 입구 가까이 이동한 뒤 다시 찾아 주세요. 주문을 지원하는 매장만 찾을 수 있어요.');
+      primary = { label: '다시 찾기', run: discover };
+      secondary = [{ label: '매장 이름으로 찾기', run: () => nav('V5-02s') }];
       break;
+    case 'V5-02e': {
+      const requestHelp = () => {
+        const message = '매장을 찾는 데 도움이 필요해요. 이 휴대폰으로 주문할 수 있는 매장인지 확인해 주세요.';
+        helpCard(message, () => app.speak(message, true));
+      };
+      body = (
+        <>
+          {subtitle('아래 방법을 위에서부터 차례로 해 보세요.')}
+          <NavigationRow
+            icon="radar"
+            title="다시 찾기"
+            description="입구 쪽으로 몇 걸음 다가간 뒤"
+            onPress={discover}
+          />
+          <NavigationRow
+            icon="search"
+            title="매장 이름으로 찾기"
+            description="참여 매장 전체에서 검색"
+            onPress={() => nav('V5-02s')}
+          />
+          <NavigationRow
+            icon="staff"
+            title="주변 사람에게 도움 요청"
+            description="큰 글씨 도움 카드를 화면에 띄워요"
+            onPress={requestHelp}
+          />
+          <Card compact>
+            <InfoRow icon="store" label="안내" value="휴대폰 주문을 지원하는 매장만 목록에 나와요" />
+          </Card>
+        </>
+      );
+      break;
+    }
     case 'E04':
     case 'E05':
       body = (
@@ -539,45 +563,26 @@ export default function App() {
         </Card>
       );
       primary = {
-        label:
-          s.flow === 'E05'
-            ? '다른 매장 찾기'
-            : s.storeId
-            ? '메뉴 다시 불러오기'
-            : '매장 다시 찾기',
-        run: () =>
-          s.flow === 'E05'
-            ? nav('V5-02e')
-            : s.storeId
-            ? nav('V5-04')
-            : discover(),
+        label: s.flow === 'E05' ? '다른 매장 찾기' : s.storeId ? '메뉴 다시 불러오기' : '매장 다시 찾기',
+        run: () => s.flow === 'E05' ? nav('V5-02s') : s.storeId ? nav('V5-04') : discover(),
       };
-      secondary = [{ label: '매장 이름으로 찾기', run: () => nav('V5-02e') }];
+      secondary = [{ label: '매장 이름으로 찾기', run: () => nav('V5-02s') }];
       break;
     case 'V5-02':
-    case 'V5-02e': {
+    case 'V5-02s': {
       const nearby = s.flow === 'V5-02';
-      const list = (nearby ? s.found : s.stores).filter(x =>
-        x.name.includes(s.query.trim()),
-      );
-      if (s.query.trim()) {
-        searchStatus = list.length
-          ? `매장 검색 결과 ${list.length}곳`
-          : '일치하는 매장이 없어요.';
-      }
+      const list = (nearby ? s.found : s.stores).filter(x => x.name.includes(s.query.trim()));
+      if (s.query.trim())
+        searchStatus = list.length ? `매장 검색 결과 ${list.length}곳` : '일치하는 매장이 없어요.';
       body = (
         <>
-          {nearby &&
-            s.found[0] &&
-            subtitle(
-              s.discovery === 'demo'
-                ? '데모 매장을 선택해 주세요.'
-                : `가장 가까운 곳은 ${s.found[0].name}이에요.`,
-            )}
+          {nearby && s.found[0] && subtitle(s.discovery === 'demo'
+            ? '데모 매장을 선택해 주세요.'
+            : `${s.found[0].name}을 찾았어요.`)}
           {search('매장 이름으로 찾기')}
-          {sectionLabel(
-            nearby && !s.query ? '가장 가까운 3곳' : '매장 검색 결과',
-          )}
+          {sectionLabel(nearby && !s.query
+            ? `찾은 매장 · ${list.length}곳`
+            : nearby ? '매장 검색 결과' : `참여 매장 · ${list.length}곳`)}
           {list.slice(0, s.storeLimit).map(x => (
             <NavigationRow
               key={x.id}
@@ -590,19 +595,22 @@ export default function App() {
           {!list.length && <T>일치하는 매장이 없어요.</T>}
           {list.length > s.storeLimit && (
             <Button
-              label="매장 3곳 더 보기"
+              label={`다른 매장 ${Math.min(3, list.length - s.storeLimit)}곳 더 보기`}
               onPress={() => d({ type: 'MORE_STORES' })}
             />
           )}
+          {!nearby && (
+            <Card compact>
+              <InfoRow icon="staff" label="휴대폰 주문 미지원" value="찾는 매장이 없다면 직원 도움이나 전화로 주문해 주세요" />
+            </Card>
+          )}
         </>
       );
-      primary = nearby
-        ? {
-            label: '찾는 매장이 없어요',
-            neutral: true,
-            run: () => nav('V5-02s'),
-          }
-        : { label: '주변 매장 다시 찾기', neutral: true, run: discover };
+      primary = nearby ? {
+        label: '찾는 매장이 없어요',
+        neutral: true,
+        run: () => nav('V5-02e'),
+      } : undefined;
       break;
     }
     case 'V5-03':
@@ -625,7 +633,11 @@ export default function App() {
               label="주문"
               value={store.open ? '지금 휴대폰 주문 가능' : '오늘 주문 마감'}
             />
-            <InfoRow icon="staff" label="안내" value={store.description} />
+            <InfoRow
+              icon="clock"
+              label="대기"
+              value={store.wait ? `앞 주문 ${store.wait.ordersAhead}건 · 약 ${store.wait.minutes}분` : '매장에서 확인해 주세요'}
+            />
           </Card>
         </>
       ) : (
@@ -634,7 +646,7 @@ export default function App() {
       secondary = [
         {
           label: '다른 매장 찾기',
-          run: () => nav(s.found.length > 1 ? 'V5-02' : 'V5-02e'),
+          run: () => nav(s.found.length > 1 ? 'V5-02' : 'V5-02s'),
         },
       ];
       break;
@@ -643,7 +655,7 @@ export default function App() {
       primary = {
         label: '매장 다시 고르기',
         neutral: true,
-        run: () => d({ type: 'BACK' }),
+        run: () => nav(s.found.length > 1 ? 'V5-02' : 'V5-02s'),
       };
       break;
     case 'V5-R1': {
@@ -1355,6 +1367,9 @@ export default function App() {
           value={s.settings}
           change={value => d({ type: 'SETTINGS', value })}
           replay={() => d({ type: 'REPLAY_TRAINING' })}
+          chooseDiscovery={() => nav('START')}
+          canChooseDiscovery={!s.request && !s.payment}
+          beaconNames={s.stores.map(store => store.beaconName)}
           alert={alert}
         />
       );
@@ -1385,10 +1400,14 @@ export default function App() {
   const pinSecondary =
     height >= 650 &&
     fontScale * theme.scale < 1.5 &&
-    ['V5-O1', 'V5-O4', 'V5-03', 'V5-R1', 'V5-06s', 'V5-12'].includes(s.flow);
+    ['START', 'V5-O1', 'V5-O4', 'V5-01e', 'V5-03', 'V5-R1', 'V5-06s', 'V5-12'].includes(s.flow);
   const hero =
-    s.flow === 'V5-01'
+    s.flow === 'START'
+      ? 'store'
+      : s.flow === 'V5-01'
       ? 'radar'
+      : s.flow === 'V5-01e'
+      ? 'alert'
       : s.flow === 'V5-04' || s.flow === 'V5-09'
       ? 'loading'
       : s.flow === 'V5-10' || s.flow === 'V5-12'
@@ -1398,15 +1417,15 @@ export default function App() {
     s.flow === 'P02-V' || s.flow === 'V5-05c' ? '' : s.message;
   return (
     <ThemeContext.Provider value={theme}>
-      <div className="app-frame" style={{ backgroundColor: theme.bg }}>
+      <div className={`app-frame${entryScreen ? ' entry-frame' : ''}`} data-flow={s.flow} style={{ backgroundColor: theme.bg }}>
         <div className="visually-hidden" role="alert">
           {s.error !== 'CHANGE_STORE' ? s.error : ''}
         </div>
         <div className="visually-hidden" role="status">
           {searchStatus || screenMessage}
         </div>
-        <View style={[st.header, { minHeight: progress ? 56 : 44 }]}>
-          {!['BOOT', 'V5-O1', 'V5-01'].includes(s.flow) && (
+        <View style={[st.header, { minHeight: entryScreen && !['V5-01', 'V5-01e'].includes(s.flow) ? 56 : progress ? 56 : 44 }]}>
+          {!['BOOT', 'START', 'V5-O1'].includes(s.flow) && (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="뒤로"
@@ -1430,7 +1449,7 @@ export default function App() {
                 fontWeight: '500',
               }}
             >
-              {topLabel}
+              {entryScreen && ['V5-01', 'V5-01e'].includes(s.flow) ? '' : topLabel}
             </T>
           </View>
           {s.flow !== 'SETTINGS' && (
@@ -1486,7 +1505,7 @@ export default function App() {
             <Icon
               name={hero}
               size={hero === 'radar' ? 120 : 64}
-              color={hero === 'loading' ? theme.text : undefined}
+              color={hero === 'loading' || hero === 'alert' ? theme.text : undefined}
             />
           )}
           <Text
@@ -1527,7 +1546,7 @@ export default function App() {
               />
             ))}
         </ScrollView>
-        <View testID="fixed-footer" style={st.footer}>
+        <View testID="fixed-footer" style={[st.footer, entryScreen && { paddingTop: primary ? 8 : 0, paddingBottom: 30 }]}>
           {primary &&
             (cartScreen ? (
               <CartBar
@@ -1562,7 +1581,7 @@ export default function App() {
                 disabled={b.disabled}
               />
             ))}
-          <View style={[st.row, { paddingTop: 3 }]}>
+          <View style={[st.row, { paddingTop: entryScreen ? 12 : 3 }]}>
             <View style={st.grow}>
               <Button
                 appearance="utility"
@@ -1612,14 +1631,22 @@ function SettingsPanel({
   value,
   change,
   replay,
+  chooseDiscovery,
+  canChooseDiscovery,
+  beaconNames,
   alert,
 }: {
   value: Settings;
   change: (v: Partial<Settings>) => void;
   replay: () => void;
+  chooseDiscovery: () => void;
+  canChooseDiscovery: boolean;
+  beaconNames: string[];
   alert: (title: string, text: string) => void;
 }) {
   const [address, setAddress] = useState(value.serverUrl);
+  const [diagnosing, setDiagnosing] = useState(false);
+  const [diagnosis, setDiagnosis] = useState('');
   const theme = React.useContext(ThemeContext);
   const toggles: [keyof Settings, string][] = [
     ['large', '큰 글씨'],
@@ -1650,6 +1677,46 @@ function SettingsPanel({
         </T>
       </Card>
       <Button label="사용법 다시 듣기" onPress={replay} />
+      <Button label="매장 찾기 방식 선택" onPress={chooseDiscovery} disabled={!canChooseDiscovery} />
+      <Card>
+        <T kind="section">BLE 기기 진단</T>
+        <T kind="small">
+          매장 이름 필터 없이 브라우저가 찾을 수 있는 BLE 기기를 확인해요.
+          목록에서 휴대폰을 선택하면 브라우저가 받은 이름을 보여드려요.
+        </T>
+        <Button
+          label={diagnosing ? '브라우저에서 기기를 선택해 주세요' : '이름 필터 없이 BLE 기기 찾기'}
+          disabled={diagnosing}
+          onPress={async () => {
+            setDiagnosis('');
+            setDiagnosing(true);
+            try {
+              // Keep requestDevice in this click, before any asynchronous work.
+              const name = await Device.inspectBeacon();
+              const result = !name
+                ? '이름 없는 기기로 표시되고 있어요. 휴대폰 광고 데이터에 Complete Local Name이 포함되어 있는지 확인해 주세요.'
+                : beaconNames.includes(name)
+                ? `선택한 기기 이름: ${name}\n등록된 매장 비콘 이름과 일치해요. 일반 매장 찾기에서도 이 기기를 선택해 주세요.`
+                : `선택한 기기 이름: ${name}\n이 이름은 등록된 매장 비콘 목록에 없어요. 휴대폰의 실제 광고 이름을 ${beaconNames[0] || '등록된 매장 비콘 이름'}로 설정해 주세요.`;
+              setDiagnosis(result);
+            } catch (error) {
+              setDiagnosis(error instanceof DOMException && error.name === 'NotFoundError'
+                ? '기기를 선택하지 않았어요. 목록에 휴대폰이 없었다면 nRF Connect의 광고 실행 상태와 Connectable 설정을 확인해 주세요.'
+                : error instanceof Error ? error.message : 'BLE 기기 진단을 완료하지 못했어요.');
+            } finally {
+              setDiagnosing(false);
+            }
+          }}
+        />
+        {!!diagnosis && (
+          <View role="status" style={{ gap: 8 }}>
+            {diagnosis.split('\n').map((line, index) => <T key={index}>{line}</T>)}
+          </View>
+        )}
+        <T kind="small">
+          현재 등록된 비콘 이름: {beaconNames.join(', ') || '없음'}
+        </T>
+      </Card>
       <Card>
         <T kind="section">개발·테스트 연결</T>
         <T kind="small">

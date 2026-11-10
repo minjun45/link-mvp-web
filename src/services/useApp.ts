@@ -5,6 +5,7 @@ import type { Payment } from '../core/types';
 import * as Device from '../native/browserDevice';
 import { persist, readSnapshot } from './storage';
 import * as api from './api';
+import { startDiscovery } from './discovery';
 
 export function useApp() {
   const [s, dispatch] = useReducer(reduce, initial);
@@ -12,6 +13,7 @@ export function useApp() {
   live.current = s;
   const [busy, setBusy] = useState(false);
   const completing = useRef(false);
+  const discovery = useRef<{ revision: number; stop: () => void } | undefined>(undefined);
   useEffect(() => {
     let active = true;
     readSnapshot()
@@ -41,6 +43,7 @@ export function useApp() {
       });
     return () => {
       active = false;
+      discovery.current?.stop();
       window.speechSynthesis?.cancel();
     };
   }, []);
@@ -74,27 +77,11 @@ export function useApp() {
       if (!cancelled) dispatch(action);
     };
     async function run() {
-      if (state.flow === 'V5-01') {
+      if (state.flow === 'START') {
         try {
-          const stores = await api.getStores(state.settings);
-          if (cancelled) return;
-          // Server store metadata is needed for selection and authoritative quoting.
-          send({ type: 'STORES', stores });
-          if (state.discovery === 'demo') {
-            send({ type: 'FOUND', stores });
-            return;
-          }
-          // Web Bluetooth requires a user gesture before the device chooser opens.
-          send({
-            type: 'FAIL',
-            flow: 'E02',
-            message: Device.canChooseBeacon()
-              ? '아래 버튼을 눌러 주변 매장 비콘을 선택해 주세요.'
-              : '이 브라우저에서는 비콘을 선택할 수 없어요. 매장 이름 검색이나 데모를 이용해 주세요.',
-          });
+          send({ type: 'STORES', stores: await api.getStores(state.settings) });
         } catch (e) {
-          if (!cancelled)
-            send({ type: 'FAIL', flow: 'E04', message: message(e) });
+          send({ type: 'FAIL', flow: 'START', message: message(e) });
         }
       } else if (state.flow === 'V5-04') {
         try {
@@ -190,6 +177,13 @@ export function useApp() {
     // revision marks explicit transitions/retries, not text input or persistence updates.
   }, [s.flow, s.revision]);
   useEffect(() => {
+    const active = discovery.current;
+    if (active && (s.flow !== 'V5-01' || s.revision !== active.revision)) {
+      active.stop();
+      discovery.current = undefined;
+    }
+  }, [s.flow, s.revision]);
+  useEffect(() => {
     if (!s.order || !['V5-10', 'V5-11', 'V5-12'].includes(s.flow)) return;
     let active = true;
     const poll = () =>
@@ -209,23 +203,25 @@ export function useApp() {
   const speak = (text: string, force = false) => {
     if (force || s.settings.voice) Device.speak(text);
   };
-  async function bluetooth() {
+  function discover(demo = false) {
     const state = live.current;
-    try {
-      const name = await Device.chooseBeacon(state.stores.map(store => store.beaconName));
-      if (live.current.revision === state.revision)
-        dispatch({ type: 'FOUND', stores: state.stores.filter(store => store.beaconName === name) });
-    } catch (e) {
-      if (live.current.revision !== state.revision) return;
-      const denied = e instanceof DOMException && e.name === 'NotAllowedError';
-      dispatch({
-        type: 'FAIL',
-        flow: denied ? 'E01' : 'E02',
-        message: denied
-          ? '브라우저에서 블루투스 권한을 허용한 뒤 다시 시도해 주세요.'
-          : '매장 비콘을 선택하지 못했어요. 다시 찾거나 매장 이름 검색을 이용해 주세요.',
-      });
+    if (state.request || state.payment) {
+      dispatch({ type: 'NAV', flow: 'P02-V' });
+      return;
     }
+    // Ignore a duplicate click until React commits the first transition.
+    if (discovery.current?.revision === state.revision + 1) return;
+    discovery.current?.stop();
+    const action = { type: 'DISCOVER' as const, demo };
+    const next = reduce(state, action);
+    dispatch(action);
+    const stop = startDiscovery({
+      settings: next.settings,
+      demo,
+      stores: state.stores,
+      send: result => dispatch({ ...result, revision: next.revision }),
+    });
+    discovery.current = { revision: next.revision, stop };
   }
   async function voiceSearch() {
     try {
@@ -263,7 +259,7 @@ export function useApp() {
     dispatch,
     busy,
     speak,
-    bluetooth,
+    discover,
     voiceSearch,
     complete,
   };

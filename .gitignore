@@ -3,3 +3,6 @@ dist/
 coverage/
 *.local
 npm-debug.log*
+
+# Local Figma reference export (not needed for the app or tests).
+/매장 주문·결제 화면 설계_1103.fig

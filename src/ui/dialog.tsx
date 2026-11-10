@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Button, T, type Theme } from './kit';
 
 type Choice = { text: string; onPress?: () => void };
-type Message = { title: string; text: string; choices: Choice[]; onCancel?: () => void };
+type Message = { title: string; text: string; choices: Choice[]; onCancel?: () => void; large?: boolean };
 
 export function useAppDialog(theme: Theme) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -28,10 +28,19 @@ export function useAppDialog(theme: Theme) {
     setMessage({ title, text, choices, onCancel });
   }
 
+  function helpCard(text: string, read: () => void) {
+    setMessage({
+      title: '주변 사람에게 도움 요청',
+      text,
+      large: true,
+      choices: [{ text: '안내 듣기', onPress: read }, { text: '닫기' }],
+    });
+  }
+
   const dialog = (
     <dialog
       ref={ref}
-      className="app-dialog"
+      className={`app-dialog${message?.large ? ' help-card' : ''}`}
       aria-labelledby="dialog-title"
       style={{ backgroundColor: theme.card }}
       onCancel={event => {
@@ -44,7 +53,7 @@ export function useAppDialog(theme: Theme) {
       {message && (
         <div style={{ display: 'grid', gap: 12 }}>
           <div id="dialog-title" ref={titleRef} tabIndex={-1}><T kind="section">{message.title}</T></div>
-          <div id="dialog-text"><T>{message.text}</T></div>
+          <div id="dialog-text"><T style={message.large ? { fontSize: 26 * theme.scale, lineHeight: 38 * theme.scale, fontWeight: '700' } : undefined}>{message.text}</T></div>
           {message.choices.map(choice => (
             <Button
               key={choice.text}
@@ -59,5 +68,5 @@ export function useAppDialog(theme: Theme) {
       )}
     </dialog>
   );
-  return { alert, dialog };
+  return { alert, helpCard, dialog };
 }

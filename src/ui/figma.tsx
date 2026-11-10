@@ -19,8 +19,10 @@ import store from './assets/store.png';
 import pin from './assets/pin.png';
 import card from './assets/card.png';
 import cup from './assets/cup.png';
+import alert from './assets/alert.svg';
 
 const artwork = {
+  alert,
   radar,
   loading,
   check,
