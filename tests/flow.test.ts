@@ -174,6 +174,7 @@ test('pickup returns to discovery choices without losing order history', () => {
     flow: 'START',
     onboarded: true,
     history: pickup.history,
+    order: undefined,
     backStack: [],
   });
   expect(reduce(reset, { type: 'DISCOVER', demo: true })).toMatchObject({

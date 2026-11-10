@@ -602,7 +602,7 @@ export function reduce(s: State, a: Action): State {
         return goto(s, s.order?.status === 'ready' ? 'V5-12' : 'V5-11');
       case 'PICKUP_COMPLETE':
         if (s.flow !== 'V5-12') return s;
-        return start(s);
+        return start({ ...s, order: undefined });
       case 'ORDER_UPDATED':
         return {
           ...s,

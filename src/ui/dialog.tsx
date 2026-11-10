@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, T, type Theme } from './kit';
 
-type Choice = { text: string; onPress?: () => void };
+type Choice = { text: string; onPress?: () => void; keepOpen?: boolean };
 type Message = { title: string; text: string; choices: Choice[]; onCancel?: () => void; large?: boolean };
 
 export function useAppDialog(theme: Theme) {
@@ -33,7 +33,7 @@ export function useAppDialog(theme: Theme) {
       title: '주변 사람에게 도움 요청',
       text,
       large: true,
-      choices: [{ text: '안내 듣기', onPress: read }, { text: '닫기' }],
+      choices: [{ text: '안내 듣기', onPress: read, keepOpen: true }, { text: '닫기' }],
     });
   }
 
@@ -59,7 +59,7 @@ export function useAppDialog(theme: Theme) {
               key={choice.text}
               label={choice.text}
               onPress={() => {
-                ref.current?.close();
+                if (!choice.keepOpen) ref.current?.close();
                 choice.onPress?.();
               }}
             />

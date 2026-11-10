@@ -92,7 +92,7 @@ test('footer has no shared replay button; order screens keep their own replay ac
   for (const flow of ['START', 'V5-O2', 'V5-05', 'V5-08', 'SETTINGS'] as const) {
     const html = render(flow, extra);
     expect(html).not.toContain('aria-label="다시 듣기"');
-    expect(html).toContain(`aria-label="${flow.startsWith('V5-O') ? '도움 요청' : '직원 도움'}"`);
+    expect(html).toContain('aria-label="직원에게 보여주기"');
   }
   expect(render('V5-O4')).not.toContain('맨 아래 왼쪽 다시 듣기');
   const order: Order = {
