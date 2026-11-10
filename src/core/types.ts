@@ -6,6 +6,7 @@ export type Store = {
   beaconName: string;
   description: string;
   open: boolean;
+  wait?: { ordersAhead: number; minutes: number };
 };
 export type Choice = { id: string; name: string; price: number };
 export type Group = {
@@ -82,11 +83,13 @@ export type Request = {
 };
 export type Flow =
   | 'BOOT'
+  | 'START'
   | 'V5-O1'
   | 'V5-O2'
   | 'V5-O3'
   | 'V5-O4'
   | 'V5-01'
+  | 'V5-01e'
   | 'E01'
   | 'E02'
   | 'E03'
@@ -175,6 +178,7 @@ export type State = Snapshot & {
   returnReview: boolean;
   returnTo: Flow;
   discovery: 'ble' | 'demo';
+  discoveryReady: boolean;
   error: string;
   message: string;
   missingGroup?: string;

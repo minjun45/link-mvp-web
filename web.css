@@ -30,6 +30,14 @@ html, body {
     env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 
+#root:has(.entry-frame) {
+  max-width: 390px;
+}
+
+.help-card #dialog-text {
+  padding-block: 16px;
+}
+
 :focus-visible {
   outline: 3px solid #2474c5;
   outline-offset: -3px;

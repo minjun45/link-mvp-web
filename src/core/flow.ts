@@ -38,8 +38,9 @@ export const initial: State = {
   categoryLimit: 6,
   step: 0,
   returnReview: false,
-  returnTo: 'V5-01',
+  returnTo: 'START',
   discovery: 'ble',
+  discoveryReady: false,
   error: '',
   message: '',
   revision: 0,
@@ -51,15 +52,15 @@ export type Action =
       stores: Store[];
       products: Product[];
     }
-  | { type: 'STORES'; stores: Store[] }
+  | { type: 'STORES'; stores: Store[]; revision?: number }
   | { type: 'NAV'; flow: Flow }
   | { type: 'BACK' }
   | { type: 'ONBOARD_NEXT' }
   | { type: 'ONBOARD_SKIP' }
   | { type: 'REPLAY_TRAINING' }
   | { type: 'DISCOVER'; demo?: boolean }
-  | { type: 'FOUND'; stores: Store[] }
-  | { type: 'FAIL'; flow: Flow; message: string }
+  | { type: 'FOUND'; stores: Store[]; revision?: number }
+  | { type: 'FAIL'; flow: Flow; message: string; revision?: number }
   | { type: 'SELECT_STORE'; id: string }
   | { type: 'CONFIRM_STORE'; clear?: boolean }
   | { type: 'MENU_LOADED'; products: Product[] }
@@ -106,6 +107,7 @@ const missing = (s: State) =>
 const goto = (s: State, flow: Flow): State => ({
   ...s,
   flow,
+  ...(['START', 'V5-01'].includes(flow) ? { discoveryReady: false } : {}),
   error: '',
   message: '',
   signal: undefined,
@@ -113,6 +115,8 @@ const goto = (s: State, flow: Flow): State => ({
   revision: s.revision + 1,
 });
 const shoppingScreens = new Set<Flow>([
+  'V5-01',
+  'V5-01e',
   'V5-02',
   'V5-02e',
   'V5-02s',
@@ -133,6 +137,8 @@ const shoppingScreens = new Set<Flow>([
 // and payment data stay current when the user goes back.
 function visit(s: State, flow: Flow): State {
   if (s.flow === flow) return goto(s, flow);
+  // A cancelled automatic loader must never become a Back destination.
+  if (s.flow === 'V5-04') return goto(s, flow);
   const {
     flow: previous,
     selectedStoreId,
@@ -184,11 +190,23 @@ function discover(s: State, demo = false): State {
     storeLimit: 3,
   };
 }
+function start(s: State): State {
+  return {
+    ...goto(s, 'START'),
+    backStack: [],
+    found: [],
+    selectedStoreId: undefined,
+    query: '',
+    storeLimit: 3,
+  };
+}
 const backRoutes: Partial<Record<Flow, Flow>> = {
   'V5-O2': 'V5-O1',
   'V5-O3': 'V5-O2',
   'V5-O4': 'V5-O3',
-  'V5-02': 'V5-01',
+  'V5-01': 'START',
+  'V5-02': 'START',
+  'V5-01e': 'START',
   'V5-02e': 'V5-02',
   'V5-02s': 'V5-02e',
   'V5-03': 'V5-02',
@@ -213,6 +231,7 @@ const backRoutes: Partial<Record<Flow, Flow>> = {
   'V5-12': 'V5-11',
 };
 export function reduce(s: State, a: Action): State {
+  if ('revision' in a && a.revision !== undefined && a.revision !== s.revision) return s;
   try {
     switch (a.type) {
       case 'HYDRATE': {
@@ -228,23 +247,29 @@ export function reduce(s: State, a: Action): State {
           flow:
             next.request || next.payment
               ? 'P02-V'
-              : next.onboarded
-              ? 'V5-01'
-              : 'V5-O1',
+              : 'START',
         };
       }
       case 'STORES':
-        return { ...s, stores: a.stores };
+        return { ...s, stores: a.stores, discoveryReady: true };
       case 'NAV':
+        if (a.flow === 'START')
+          return s.request || s.payment ? goto(s, 'P02-V') : start(s);
         return {
           ...(shoppingScreens.has(a.flow) &&
-          (shoppingScreens.has(s.flow) || a.flow === 'V5-02e')
+          (shoppingScreens.has(s.flow) || ['V5-02e', 'V5-02s'].includes(a.flow))
             ? visit(s, a.flow)
             : goto(s, a.flow)),
-          returnTo: a.flow === 'SETTINGS' ? s.flow : s.returnTo,
+          ...(['V5-02e', 'V5-02s'].includes(a.flow) && a.flow !== s.flow
+            ? { query: '', storeLimit: 3 }
+            : {}),
+          returnTo: a.flow === 'SETTINGS'
+            ? s.flow === 'V5-01' ? 'START' : s.flow
+            : s.returnTo,
         };
       case 'BACK':
-        if (s.flow === 'SETTINGS') return goto(s, s.returnTo);
+        if (s.flow === 'SETTINGS') return s.returnTo === 'START' ? start(s) : goto(s, s.returnTo);
+        if (['V5-01', 'V5-01e'].includes(s.flow)) return start(s);
         if (['P01-E2', 'P02-C', 'P02-F', 'P02-T'].includes(s.flow))
           return {
             ...goto(s, 'V5-08'),
@@ -262,13 +287,14 @@ export function reduce(s: State, a: Action): State {
           s.backStack.length
         ) {
           const previous = s.backStack[s.backStack.length - 1];
+          if (previous.flow === 'V5-01') return start(s);
           return {
             ...goto(s, previous.flow),
             ...previous,
             backStack: s.backStack.slice(0, -1),
           };
         }
-        return goto(s, backRoutes[s.flow] || 'V5-01');
+        return goto(s, backRoutes[s.flow] || 'START');
       case 'ONBOARD_NEXT':
         return s.flow === 'V5-O1'
           ? goto(s, 'V5-O2')
@@ -276,18 +302,24 @@ export function reduce(s: State, a: Action): State {
           ? goto(s, 'V5-O3')
           : s.flow === 'V5-O3'
           ? goto(s, 'V5-O4')
-          : { ...discover(s, s.discovery === 'demo'), onboarded: true };
+          : { ...start(s), onboarded: true };
       case 'ONBOARD_SKIP':
-        return { ...discover(s, s.discovery === 'demo'), onboarded: true };
+        return { ...start(s), onboarded: true };
       case 'REPLAY_TRAINING':
         return { ...goto(s, 'V5-O1'), backStack: [] };
       case 'DISCOVER':
-        return discover(s, a.demo);
+        if (s.request || s.payment) return goto(s, 'P02-V');
+        return discover(
+          a.demo && s.settings.mode !== 'local'
+            ? reduce(s, { type: 'SETTINGS', value: { mode: 'local' } })
+            : s,
+          a.demo,
+        );
       case 'FOUND':
         return {
           ...goto(
             s,
-            a.stores.length === 1 ? 'V5-03' : a.stores.length ? 'V5-02' : 'E03',
+            a.stores.length === 1 ? 'V5-03' : a.stores.length ? 'V5-02' : 'V5-01e',
           ),
           found: a.stores,
           selectedStoreId: a.stores.length === 1 ? a.stores[0].id : undefined,
@@ -328,6 +360,7 @@ export function reduce(s: State, a: Action): State {
         return {
           ...s,
           query: a.value,
+          storeLimit: 3,
           menuLimit: 5,
           flow: s.flow === 'V5-05c' ? 'V5-05' : s.flow,
         };
@@ -558,9 +591,7 @@ export function reduce(s: State, a: Action): State {
         return goto(s, s.order?.status === 'ready' ? 'V5-12' : 'V5-11');
       case 'PICKUP_COMPLETE':
         if (s.flow !== 'V5-12') return s;
-        return s.discovery === 'demo' && s.order?.demo
-          ? { ...discover(s, true), flow: 'V5-O1' }
-          : discover(s);
+        return start(s);
       case 'ORDER_UPDATED':
         return {
           ...s,
@@ -590,7 +621,7 @@ export function reduce(s: State, a: Action): State {
                 history: {},
                 storeId: undefined,
                 order: undefined,
-                returnTo: 'V5-01',
+                returnTo: 'START',
                 backStack: [],
               }
             : {}),
