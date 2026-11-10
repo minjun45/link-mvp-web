@@ -57,6 +57,18 @@ test('08: zero/one/multiple scan results and three-at-a-time lists', () => {
   expect(s.storeLimit).toBe(3);
   expect(reduce(s, { type: 'MORE_STORES' }).storeLimit).toBe(6);
 });
+test('08: back from the demo store list leaves demo mode instead of rescanning', () => {
+  const demo = reduce(reduce(menu(), { type: 'DISCOVER', demo: true }), {
+    type: 'FOUND',
+    stores,
+  });
+  expect(demo).toMatchObject({ flow: 'V5-02', discovery: 'demo' });
+  expect(reduce(demo, { type: 'BACK' })).toMatchObject({
+    flow: 'V5-01',
+    discovery: 'ble',
+    found: [],
+  });
+});
 test('09: store confirmation loads menu; history offers reorder only for that store', () => {
   let s = reduce(menu(), { type: 'CONFIRM_STORE' });
   expect(s.flow).toBe('V5-04');

@@ -257,6 +257,17 @@ export function reduce(s: State, a: Action): State {
           if (s.step > 0) return { ...goto(s, 'V5-M3'), step: s.step - 1 };
         }
         if (s.flow === 'V5-M4') return goto({ ...s, step: 0 }, 'V5-M3');
+        // V5-01 rescans the demo stores as soon as it opens, which would
+        // bounce the user straight back here. Leave demo mode instead so the
+        // user returns to the screen where they choose how to find a store.
+        if (s.flow === 'V5-02' && s.discovery === 'demo')
+          return {
+            ...goto(s, 'V5-01'),
+            discovery: 'ble',
+            found: [],
+            selectedStoreId: undefined,
+            backStack: [],
+          };
         if (
           (shoppingScreens.has(s.flow) || s.flow === 'V5-04') &&
           s.backStack.length
