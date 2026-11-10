@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from 'vitest';
-import { chooseBeacon, inspectBeacon } from '../src/native/browserDevice';
+import { chooseBeacon, inspectBeacon, getBluetoothStatus } from '../src/native/browserDevice';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -35,5 +35,31 @@ test('insecure pages are rejected before requesting device access', async () => 
 test('unsupported browsers get a useful error', async () => {
   adapter();
   vi.stubGlobal('navigator', {});
-  await expect(inspectBeacon()).rejects.toThrow('노트북 Chrome');
+  await expect(inspectBeacon()).rejects.toThrow('Web Bluetooth');
+});
+
+test('Samsung Internet is identified without a Chrome-only browser gate', async () => {
+  adapter();
+  const requestDevice = vi.fn(async () => ({ name: 'LINK-KAIST' }));
+  vi.stubGlobal('navigator', {
+    userAgent: 'Mozilla/5.0 (Linux; Android 15) SamsungBrowser/29.0 Chrome/132.0 Mobile',
+    userActivation: { isActive: true },
+    bluetooth: { requestDevice },
+  });
+  expect(getBluetoothStatus()).toMatchObject({ browser: '삼성 인터넷 29.0', secure: true, api: true });
+  await chooseBeacon(['LINK-KAIST']);
+  expect(requestDevice).toHaveBeenCalledTimes(1);
+  expect(getBluetoothStatus().request).toMatchObject({ phase: 'selected', userActivation: true });
+});
+
+test('blocked permission keeps its original error for diagnostics', async () => {
+  adapter();
+  vi.stubGlobal('navigator', {
+    userActivation: { isActive: false },
+    bluetooth: { requestDevice: vi.fn(async () => { throw new DOMException('Must be handling a user gesture', 'SecurityError'); }) },
+  });
+  await expect(inspectBeacon()).rejects.toThrow('[SecurityError]');
+  expect(getBluetoothStatus().request).toMatchObject({
+    phase: 'failed', userActivation: false, error: 'SecurityError: Must be handling a user gesture',
+  });
 });

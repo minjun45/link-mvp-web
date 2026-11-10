@@ -126,6 +126,7 @@ export function NavigationRow({
   tag,
   onPress,
   disabled,
+  nativeClick = false,
 }: {
   title: string;
   description?: string;
@@ -135,8 +136,31 @@ export function NavigationRow({
   tag?: string;
   onPress: () => void;
   disabled?: boolean;
+  nativeClick?: boolean;
 }) {
   const theme = useContext(ThemeContext);
+  if (nativeClick) {
+    return (
+      <View style={[styles.navRow, { position: 'relative', backgroundColor: theme.card, borderWidth: theme.contrast ? 2 : 0, borderColor: theme.line, opacity: disabled ? 0.45 : 1 }]}>
+        <View aria-hidden style={{ flexDirection: 'row', alignItems: 'center', gap: 14, flex: 1 }}>
+          {icon && <Icon name={icon} color={theme.text} />}
+          <View style={styles.copy}>
+            <T style={{ fontSize: 20 * theme.scale, lineHeight: 27 * theme.scale, fontWeight: '500' }}>{title}</T>
+            {!!description && <T kind="small">{description}</T>}
+          </View>
+          <Icon name="next" size={26} color={theme.text} />
+        </View>
+        <button
+          type="button"
+          className="browser-action"
+          aria-label={[title, description].filter(Boolean).join(', ')}
+          disabled={disabled}
+          onClick={onPress}
+          style={{ position: 'absolute', inset: 0, width: '100%', border: 0, borderRadius: 16, background: 'transparent', cursor: disabled ? 'default' : 'pointer' }}
+        />
+      </View>
+    );
+  }
   return (
     <Pressable
       accessible

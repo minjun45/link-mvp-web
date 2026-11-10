@@ -88,6 +88,7 @@ export function Button({
   testID,
   appearance = 'standard',
   icon,
+  nativeClick = false,
 }: {
   label: string;
   onPress: () => void;
@@ -98,11 +99,51 @@ export function Button({
   testID?: string;
   appearance?: 'standard' | 'utility' | 'compact' | 'dark';
   icon?: React.ReactNode;
+  nativeClick?: boolean;
 }) {
   const t = useContext(ThemeContext);
   const utility = appearance === 'utility';
   const compact = appearance === 'compact' || appearance === 'dark';
   const dark = appearance === 'dark';
+  if (nativeClick) {
+    // Permission-gated browser APIs must run directly in the trusted DOM click.
+    // Opt in only for these actions, preserving the other controls' behavior.
+    return (
+      <button
+        type="button"
+        className="browser-action"
+        data-testid={testID}
+        aria-label={label}
+        aria-disabled={disabled}
+        disabled={disabled}
+        onClick={onPress}
+        style={{
+          display: 'flex',
+          width: '100%',
+          boxSizing: 'border-box',
+          minHeight: utility ? 60 : compact ? 56 : 72,
+          padding: `${compact || utility ? 10 : 14}px ${compact || utility ? 8 : 16}px`,
+          borderRadius: 12,
+          justifyContent: 'center',
+          alignItems: 'center',
+          gap: 8,
+          border: t.contrast && !primary ? `2px solid ${t.line}` : '0',
+          backgroundColor: primary ? '#FEE500' : utility ? t.card : t.bg === light.bg ? '#E4E5E9' : t.card,
+          color: primary ? '#000000' : t.text,
+          fontFamily,
+          fontSize: (utility ? 18 : compact ? 17 : 21) * t.scale,
+          lineHeight: `${(utility ? 24 : compact ? 23 : 28) * t.scale}px`,
+          fontWeight: utility ? '500' : '700',
+          textAlign: 'center',
+          cursor: disabled ? 'default' : 'pointer',
+          opacity: disabled ? 0.45 : 1,
+        }}
+      >
+        {icon}
+        <span>{label}</span>
+      </button>
+    );
+  }
   return (
     <Pressable
       testID={testID}

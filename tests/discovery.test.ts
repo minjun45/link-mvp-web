@@ -19,17 +19,28 @@ function scan(
   return startDiscovery({ settings, demo, stores: catalog.stores, send }, { loadStores, choose });
 }
 
-test('1103: discovery expires at 15 seconds, including when store metadata is still loading', async () => {
+test('metadata that takes more than 15 seconds produces a connection error', async () => {
   const send = vi.fn();
   let resolve!: (stores: Store[]) => void;
   scan(false, send, () => new Promise(r => { resolve = r; }));
   await vi.advanceTimersByTimeAsync(14_999);
   expect(send).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(1);
-  expect(send).toHaveBeenCalledExactlyOnceWith({ type: 'FOUND', stores: [] });
+  expect(send).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ type: 'FAIL', flow: 'E04' }));
   resolve(catalog.stores);
   await vi.advanceTimersByTimeAsync(0);
   expect(send).toHaveBeenCalledTimes(1);
+});
+
+test('a browser selection after 15 seconds is still accepted once metadata has loaded', async () => {
+  const send = vi.fn();
+  let resolve!: (name: string) => void;
+  scan(false, send, async () => catalog.stores, () => new Promise(r => { resolve = r; }));
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(send).not.toHaveBeenCalled();
+  resolve(catalog.stores[0].beaconName);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(send).toHaveBeenLastCalledWith({ type: 'FOUND', stores: [catalog.stores[0]] });
 });
 
 test('1103: leaving discovery ignores late metadata and cancels its timeout', async () => {
