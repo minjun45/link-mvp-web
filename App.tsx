@@ -641,7 +641,7 @@ export default function App() {
       secondary = [
         {
           label: '다른 매장 찾기',
-          run: () => nav(s.found.length > 1 ? 'V5-02' : 'V5-02s'),
+          run: discover,
         },
       ];
       break;
