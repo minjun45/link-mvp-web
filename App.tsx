@@ -42,6 +42,10 @@ type ActionButton = {
   disabled?: boolean;
   neutral?: boolean;
 };
+function menuSearchKey(text: string) {
+  return text.replace(/\s+/g, '').replace(/라떼/g, '라테');
+}
+
 export default function App() {
   const app = useApp();
   const { s, dispatch: d } = app;
@@ -745,11 +749,11 @@ export default function App() {
         );
         break;
       }
-      const query = s.query.trim();
+      const query = menuSearchKey(s.query);
       const items = s.products
         .filter(p =>
           query
-            ? p.name.includes(query)
+            ? menuSearchKey(p.name).includes(query)
             : !s.category || p.category === s.category,
         )
         .sort(
