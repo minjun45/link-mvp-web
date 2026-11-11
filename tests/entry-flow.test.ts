@@ -31,6 +31,14 @@ test('entry choices select real or demo discovery; demo always uses local test d
   expect(reduce(saved, { type: 'DISCOVER', demo: true })).toMatchObject({ flow: 'V5-01', discovery: 'demo', settings: { mode: 'local' } });
 });
 
+test('Bluetooth guidance waits for an explicit discovery action and can return to entry choices', () => {
+  const home = reduce(initial, { type: 'HYDRATE', stores, products });
+  const guide = reduce({ ...home, discovery: 'demo' }, { type: 'NAV', flow: 'BLE_GUIDE' });
+  expect(guide).toMatchObject({ flow: 'BLE_GUIDE', discovery: 'ble', backStack: [] });
+  expect(reduce(guide, { type: 'DISCOVER' })).toMatchObject({ flow: 'V5-01', discovery: 'ble' });
+  expect(reduce(guide, { type: 'BACK' }).flow).toBe('START');
+});
+
 test('back from a Bluetooth-selected store returns to entry choices without inventing a store list', () => {
   const cart = [{ id: 'saved', productId: products[0].id, quantity: 2, options: defaults(products[0]) }];
   const confirmed = reduce({ ...start(), storeId: stores[0].id, cart }, {
@@ -95,6 +103,7 @@ test('pending payment recovery takes priority over starting either discovery mod
   const attempted = reduce(pending, { type: 'DISCOVER', demo: true });
   expect(attempted).toMatchObject({ flow: 'P02-V', settings: { mode: 'server' }, request: pending.request });
   expect(reduce(pending, { type: 'NAV', flow: 'START' }).flow).toBe('P02-V');
+  expect(reduce(pending, { type: 'NAV', flow: 'BLE_GUIDE' })).toMatchObject({ flow: 'P02-V', request: pending.request });
 });
 
 test('1103: no match leads to 01e; name search confirms a store and can return to its query', () => {

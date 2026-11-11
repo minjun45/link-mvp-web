@@ -19,20 +19,30 @@ function scan(
   return startDiscovery({ settings, demo, stores: catalog.stores, send }, { loadStores, choose });
 }
 
-test('1103: discovery expires at 15 seconds, including when store metadata is still loading', async () => {
+test('Bluetooth selection stays pending without a deadline and accepts a late choice', async () => {
   const send = vi.fn();
-  let resolve!: (stores: Store[]) => void;
-  scan(false, send, () => new Promise(r => { resolve = r; }));
-  await vi.advanceTimersByTimeAsync(14_999);
+  let select!: (name: string) => void;
+  scan(false, send, async () => catalog.stores, () => new Promise(resolve => { select = resolve; }));
+  await vi.advanceTimersByTimeAsync(120_000);
   expect(send).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(1);
-  expect(send).toHaveBeenCalledExactlyOnceWith({ type: 'FOUND', stores: [] });
-  resolve(catalog.stores);
+  select(catalog.stores[0].beaconName);
   await vi.advanceTimersByTimeAsync(0);
-  expect(send).toHaveBeenCalledTimes(1);
+  expect(send).toHaveBeenLastCalledWith({ type: 'FOUND', stores: [catalog.stores[0]] });
+  expect(send).toHaveBeenCalledTimes(2);
 });
 
-test('1103: leaving discovery ignores late metadata and cancels its timeout', async () => {
+test('slow store metadata does not expire a completed device selection', async () => {
+  const send = vi.fn();
+  let resolve!: (stores: Store[]) => void;
+  scan(false, send, () => new Promise(r => { resolve = r; }), async () => catalog.stores[0].beaconName);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(send).not.toHaveBeenCalled();
+  resolve(catalog.stores);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(send).toHaveBeenLastCalledWith({ type: 'FOUND', stores: [catalog.stores[0]] });
+});
+
+test('leaving discovery ignores late metadata', async () => {
   const send = vi.fn();
   let resolve!: (stores: Store[]) => void;
   const stop = scan(false, send, () => new Promise(r => { resolve = r; }));
@@ -42,7 +52,7 @@ test('1103: leaving discovery ignores late metadata and cancels its timeout', as
   expect(send).not.toHaveBeenCalled();
 });
 
-test('demo discovery shows its loading screen before returning results and cancels the deadline', async () => {
+test('demo discovery shows its loading screen before returning results exactly once', async () => {
   const send = vi.fn();
   const choose = vi.fn();
   scan(true, send, async () => catalog.stores, choose);

@@ -3,7 +3,6 @@ import type { Settings, Store } from '../core/types';
 import { getStores } from './api';
 import { chooseBeacon } from '../native/browserDevice';
 
-export const DISCOVERY_TIMEOUT_MS = 15_000;
 export const DEMO_DISCOVERY_MS = 2_000;
 type DiscoveryAction = Extract<Action, { type: 'STORES' | 'FOUND' | 'FAIL' }>;
 type DiscoveryOptions = {
@@ -25,12 +24,10 @@ export function startDiscovery(
 ) {
   let active = true;
   let demoTimer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = setTimeout(() => finish({ type: 'FOUND', stores: [] }), DISCOVERY_TIMEOUT_MS);
 
   function finish(action: DiscoveryAction) {
     if (!active) return;
     active = false;
-    clearTimeout(timeout);
     clearTimeout(demoTimer);
     send(action);
   }
@@ -72,7 +69,6 @@ export function startDiscovery(
 
   return () => {
     active = false;
-    clearTimeout(timeout);
     clearTimeout(demoTimer);
   };
 }

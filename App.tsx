@@ -73,7 +73,7 @@ export default function App() {
     contrast: s.settings.contrast,
   };
   const { alert, helpCard, dialog } = useAppDialog(theme);
-  const entryScreen = ['START', 'V5-01', 'V5-01e', 'V5-02', 'V5-02e', 'V5-02s', 'V5-03', 'V5-04'].includes(s.flow);
+  const entryScreen = ['START', 'BLE_GUIDE', 'V5-01', 'V5-01e', 'V5-02', 'V5-02e', 'V5-02s', 'V5-03', 'V5-04'].includes(s.flow);
   const heading = useRef<React.ComponentRef<typeof Text>>(null);
   const scroll = useRef<React.ComponentRef<typeof ScrollView>>(null);
   const previousScreen = useRef({ flow: s.flow, revision: s.revision });
@@ -129,7 +129,9 @@ export default function App() {
   const menu = () => nav(s.products.length > 20 ? 'V5-M1' : 'V5-05');
   const checkout = (reorder = false) =>
     d({ type: 'CHECKOUT', key: key(), reorder });
-  const discover = () => app.discover(s.discovery === 'demo');
+  const discover = () => s.discovery === 'demo'
+    ? app.discover(true)
+    : nav('BLE_GUIDE');
   const add = () => d({ type: 'ADD', id: key() });
   useEffect(() => {
     const previous = previousScreen.current;
@@ -138,6 +140,8 @@ export default function App() {
     const inlineMenuUpdate = previous.flow === 'V5-05c' && s.flow === 'V5-05';
     const pickupReady = previous.flow === 'V5-11' && s.flow === 'V5-12';
     if (sameVisit && (inlineMenuUpdate || pickupReady)) return;
+    // The browser owns focus while its Bluetooth device chooser is open.
+    if (s.flow === 'V5-01' && s.discovery === 'ble') return;
 
     scroll.current?.scrollTo({ y: 0, animated: false });
     const titleNode = heading.current as unknown as HTMLElement | null;
@@ -364,10 +368,18 @@ export default function App() {
       );
       primary = {
         label: '실제 매장 찾기',
-        run: () => app.discover(false),
+        run: () => nav('BLE_GUIDE'),
         disabled: !s.discoveryReady,
       };
       secondary = [{ label: '데모 매장으로 진행하기', run: () => app.discover(true) }];
+      break;
+    case 'BLE_GUIDE':
+      body = subtitle('다음 창에서 매장 기기를 선택해 주세요. 웹 주소가 먼저 읽힐 수 있어요.');
+      primary = {
+        label: '기기 선택 창 열기',
+        run: () => app.discover(false),
+      };
+      secondary = [{ label: '매장 이름으로 찾기', run: () => nav('V5-02s') }];
       break;
     case 'V5-O1':
       body = (
@@ -491,7 +503,9 @@ export default function App() {
     case 'V5-01':
       body = (
         <>
-          {subtitle('매장 입구 근처에서 잠시 기다려 주세요. 찾으면 진동으로 알려드려요.')}
+          {subtitle(s.discovery === 'demo'
+            ? '매장 입구 근처에서 잠시 기다려 주세요. 찾으면 진동으로 알려드려요.'
+            : '브라우저 창에서 매장 기기를 선택해 주세요.')}
           <Card compact>
             <InfoRow
               icon="store"
@@ -500,7 +514,6 @@ export default function App() {
                 ? '데모 매장 확인 중'
                 : '주변 기기 확인 중'}
             />
-            <InfoRow icon="clock" label="걸리는 시간" value="최대 15초" />
           </Card>
         </>
       );
@@ -1388,7 +1401,7 @@ export default function App() {
   const pinSecondary =
     height >= 650 &&
     fontScale * theme.scale < 1.5 &&
-    ['START', 'V5-O1', 'V5-O4', 'V5-01e', 'V5-03', 'V5-R1', 'V5-06s', 'V5-12'].includes(s.flow);
+    ['START', 'BLE_GUIDE', 'V5-O1', 'V5-O4', 'V5-01e', 'V5-03', 'V5-R1', 'V5-06s', 'V5-12'].includes(s.flow);
   const hero =
     s.flow === 'START'
       ? 'store'

@@ -256,6 +256,10 @@ export function reduce(s: State, a: Action): State {
       case 'NAV':
         if (a.flow === 'START')
           return s.request || s.payment ? goto(s, 'P02-V') : start(s);
+        if (a.flow === 'BLE_GUIDE')
+          return s.request || s.payment
+            ? goto(s, 'P02-V')
+            : { ...goto(s, 'BLE_GUIDE'), discovery: 'ble', backStack: [] };
         return {
           ...(shoppingScreens.has(a.flow) &&
           (shoppingScreens.has(s.flow) || ['V5-02e', 'V5-02s'].includes(a.flow))
@@ -270,7 +274,7 @@ export function reduce(s: State, a: Action): State {
         };
       case 'BACK':
         if (s.flow === 'SETTINGS') return s.returnTo === 'START' ? start(s) : goto(s, s.returnTo);
-        if (['V5-01', 'V5-01e'].includes(s.flow)) return start(s);
+        if (['BLE_GUIDE', 'V5-01', 'V5-01e'].includes(s.flow)) return start(s);
         if (['P01-E2', 'P02-C', 'P02-F', 'P02-T'].includes(s.flow))
           return {
             ...goto(s, 'V5-08'),

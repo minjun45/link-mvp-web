@@ -27,12 +27,21 @@ test('entry screen offers real discovery and demo as separate actions', () => {
   expect(html).toContain('aria-label="데모 매장으로 진행하기"');
 });
 
-test('both discovery modes show the scanner without a second Bluetooth search button', () => {
+test('Bluetooth guidance explains the browser window before offering to open it', () => {
+  const html = render('BLE_GUIDE');
+  expect(html).toContain('다음 창에서 매장 기기를 선택해 주세요. 웹 주소가 먼저 읽힐 수 있어요.');
+  expect(html).toContain('aria-label="기기 선택 창 열기"');
+  expect(html).toContain('aria-label="매장 이름으로 찾기"');
+  expect(html).not.toContain('주변 매장을 찾고 있어요');
+});
+
+test('both discovery modes show the scanner without a second Bluetooth search button or time limit', () => {
   for (const discovery of ['ble', 'demo'] as const) {
     const html = render('V5-01', { discovery });
     expect(html).toContain('주변 매장을 찾고 있어요');
     expect(html).toContain('찾기 멈추기');
     expect(html).not.toContain('블루투스로 매장 찾기');
+    expect(html).not.toContain('15초');
   }
 });
 
