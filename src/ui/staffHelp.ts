@@ -3,6 +3,7 @@ import type { Quote, State } from '../core/types';
 
 export function staffHelpText(s: State, cartQuote?: Quote): string {
   switch (s.flow) {
+    case 'BLE_GUIDE':
     case 'V5-01':
     case 'V5-01e':
     case 'V5-02':

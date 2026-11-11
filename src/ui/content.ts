@@ -2,6 +2,7 @@ import type { Flow } from '../core/types';
 export const titles: Record<Flow, string> = {
   BOOT: '링크를 준비하고 있어요',
   START: '어떻게 시작할까요?',
+  BLE_GUIDE: '블루투스로 매장 찾기',
   'V5-O1': '링크 사용법',
   'V5-O2': '화면 구조',
   'V5-O3': '진동과 소리',
@@ -44,6 +45,7 @@ export const titles: Record<Flow, string> = {
 
 export const topLabels: Partial<Record<Flow, string>> = {
   START: '시작하기',
+  BLE_GUIDE: '매장 찾기',
   'V5-O1': '처음 사용',
   'V5-O2': '사용법 1 / 3',
   'V5-O3': '사용법 2 / 3',

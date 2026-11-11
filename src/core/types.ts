@@ -84,6 +84,7 @@ export type Request = {
 export type Flow =
   | 'BOOT'
   | 'START'
+  | 'BLE_GUIDE'
   | 'V5-O1'
   | 'V5-O2'
   | 'V5-O3'
