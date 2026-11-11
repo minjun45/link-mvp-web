@@ -48,6 +48,26 @@ test('entry choice is first; optional onboarding returns to entry choice and pre
   expect(reduce(start(), { type: 'ONBOARD_SKIP' }).onboarded).toBe(true);
   expect(reduce(s, { type: 'REPLAY_TRAINING' }).flow).toBe('V5-O1');
 });
+test('restoring old settings drops automatic speech and retains display and server preferences', () => {
+  const saved = {
+    ...snapshot(initial),
+    settings: {
+      ...initial.settings,
+      voice: true,
+      large: true,
+      contrast: true,
+      mode: 'server' as const,
+      serverUrl: 'https://example.test',
+    },
+  };
+  const restored = reduce(initial, { type: 'HYDRATE', snapshot: saved, stores, products });
+  expect(restored.settings).not.toHaveProperty('voice');
+  expect(snapshot(restored).settings).toMatchObject({
+    large: true, contrast: true, mode: 'server', serverUrl: 'https://example.test',
+  });
+  expect(snapshot(restored).settings).not.toHaveProperty('voice');
+});
+
 test('08: zero/one/multiple scan results and three-at-a-time lists', () => {
   expect(reduce(menu(), { type: 'FOUND', stores: [] }).flow).toBe('V5-01e');
   expect(reduce(menu(), { type: 'FOUND', stores: [stores[0]] }).flow).toBe(

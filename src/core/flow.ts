@@ -14,7 +14,6 @@ export const settings: Settings = {
   dark: false,
   contrast: false,
   large: false,
-  voice: false,
   quickOptions: false,
   mode: 'local',
   serverUrl: '',
@@ -234,10 +233,13 @@ export function reduce(s: State, a: Action): State {
   try {
     switch (a.type) {
       case 'HYDRATE': {
+        // Discard the retired automatic-speech preference from older snapshots.
+        const { voice: _legacyVoice, ...savedSettings } =
+          (a.snapshot?.settings ?? {}) as Partial<Settings> & { voice?: boolean };
         const next = {
           ...initial,
           ...a.snapshot,
-          settings: { ...settings, ...a.snapshot?.settings },
+          settings: { ...settings, ...savedSettings },
           stores: a.stores,
           products: a.products,
         };
