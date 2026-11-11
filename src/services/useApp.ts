@@ -200,9 +200,8 @@ export function useApp() {
       clearInterval(timer);
     };
   }, [s.flow, s.order?.id, s.settings]);
-  const speak = (text: string, force = false) => {
-    if (force || s.settings.voice) Device.speak(text);
-  };
+  // Speech is initiated only by explicit listen/preview actions.
+  const speak = (text: string) => Device.speak(text);
   function discover(demo = false) {
     const state = live.current;
     if (state.request || state.payment) {

@@ -126,7 +126,6 @@ export type Settings = {
   dark: boolean;
   contrast: boolean;
   large: boolean;
-  voice: boolean;
   quickOptions: boolean;
   mode: 'local' | 'server';
   serverUrl: string;

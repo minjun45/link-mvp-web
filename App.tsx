@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -33,7 +33,6 @@ import {
 import type { Group, Quote, Settings } from './src/core/types';
 import { frequent, fromOrder, key, money, quote } from './src/core/domain';
 import * as Device from './src/native/browserDevice';
-import { validateServer } from './src/services/api';
 import { useAppDialog } from './src/ui/dialog';
 
 type ActionButton = {
@@ -142,7 +141,6 @@ export default function App() {
       if (active && active !== titleNode) active.blur();
       titleNode?.focus({ preventScroll: true });
     }, 80);
-    app.speak(title);
     return () => window.clearTimeout(timer);
   }, [s.flow, s.revision]);
   useEffect(() => {
@@ -443,7 +441,7 @@ export default function App() {
               tag="들어보기"
               onPress={() => {
                 Device.signal(kind);
-                app.speak(label, true);
+                app.speak(label);
               }}
             />
           ))}
@@ -473,7 +471,7 @@ export default function App() {
         label: '연습 · 여기를 눌러 보기',
         run: () => {
           Device.signal('selected');
-          app.speak('잘하셨어요', true);
+          app.speak('잘하셨어요');
           d({ type: 'ONBOARD_NEXT' });
         },
       };
@@ -519,7 +517,7 @@ export default function App() {
     case 'V5-02e': {
       const requestHelp = () => {
         const message = '매장을 찾는 데 도움이 필요해요. 이 휴대폰으로 주문할 수 있는 매장인지 확인해 주세요.';
-        helpCard(message, () => app.speak(message, true));
+        helpCard(message, () => app.speak(message));
       };
       body = (
         <>
@@ -864,7 +862,7 @@ export default function App() {
               label="메뉴 5개 더 듣기"
               onPress={() => {
                 d({ type: 'MORE_MENU' });
-                app.speak('다음 메뉴 5개를 보여드려요.', true);
+                app.speak('다음 메뉴 5개를 보여드려요.');
               }}
             />
           )}
@@ -1308,7 +1306,7 @@ export default function App() {
         label: '주문 상태 다시 듣기',
         neutral: true,
         run: () =>
-          app.speak(`${title}. 주문번호 ${s.order?.number || ''}.`, true),
+          app.speak(`${title}. 주문번호 ${s.order?.number || ''}.`),
       };
       break;
     case 'V5-12':
@@ -1350,7 +1348,7 @@ export default function App() {
       );
       primary = {
         label: '주문번호 다시 듣기',
-        run: () => app.speak(`주문번호 ${s.order?.number || ''}`, true),
+        run: () => app.speak(`주문번호 ${s.order?.number || ''}`),
       };
       secondary = [
         {
@@ -1367,8 +1365,6 @@ export default function App() {
           replay={() => d({ type: 'REPLAY_TRAINING' })}
           chooseDiscovery={() => nav('START')}
           canChooseDiscovery={!s.request && !s.payment}
-          beaconNames={s.stores.map(store => store.beaconName)}
-          alert={alert}
         />
       );
       primary = { label: '설정 마치기', run: () => d({ type: 'BACK' }) };
@@ -1380,7 +1376,7 @@ export default function App() {
       : `${
           store?.name ? store.name + '에서 ' : ''
         }링크 앱으로 주문하는 것을 도와주세요.`;
-    helpCard(message, () => app.speak(message, true));
+    helpCard(message, () => app.speak(message));
   };
   const topLabel =
     topLabels[s.flow] || (s.flow === 'SETTINGS' ? '설정' : '링크');
@@ -1614,26 +1610,17 @@ function SettingsPanel({
   replay,
   chooseDiscovery,
   canChooseDiscovery,
-  beaconNames,
-  alert,
 }: {
   value: Settings;
   change: (v: Partial<Settings>) => void;
   replay: () => void;
   chooseDiscovery: () => void;
   canChooseDiscovery: boolean;
-  beaconNames: string[];
-  alert: (title: string, text: string) => void;
 }) {
-  const [address, setAddress] = useState(value.serverUrl);
-  const [diagnosing, setDiagnosing] = useState(false);
-  const [diagnosis, setDiagnosis] = useState('');
-  const theme = React.useContext(ThemeContext);
   const toggles: [keyof Settings, string][] = [
     ['large', '큰 글씨'],
     ['contrast', '고대비'],
     ['dark', '어두운 화면'],
-    ['voice', '화면 자동 음성 안내'],
     ['quickOptions', '기본 옵션 빠르게 담기'],
   ];
   return (
@@ -1652,86 +1639,9 @@ function SettingsPanel({
             />
           </View>
         ))}
-        <T kind="small">
-          화면 읽기 프로그램을 사용한다면 자동 음성 안내를 끌 수 있어요.
-        </T>
       </Card>
       <Button label="사용법 다시 듣기" onPress={replay} />
       <Button label="매장 찾기 방식 선택" onPress={chooseDiscovery} disabled={!canChooseDiscovery} />
-      <Card>
-        <T kind="section">BLE 기기 진단</T>
-        <T kind="small">
-          매장 이름 필터 없이 브라우저가 찾을 수 있는 BLE 기기를 확인해요.
-          목록에서 휴대폰을 선택하면 브라우저가 받은 이름을 보여드려요.
-        </T>
-        <Button
-          label={diagnosing ? '브라우저에서 기기를 선택해 주세요' : '이름 필터 없이 BLE 기기 찾기'}
-          disabled={diagnosing}
-          onPress={async () => {
-            setDiagnosis('');
-            setDiagnosing(true);
-            try {
-              // Keep requestDevice in this click, before any asynchronous work.
-              const name = await Device.inspectBeacon();
-              const result = !name
-                ? '이름 없는 기기로 표시되고 있어요. 휴대폰 광고 데이터에 Complete Local Name이 포함되어 있는지 확인해 주세요.'
-                : beaconNames.includes(name)
-                ? `선택한 기기 이름: ${name}\n등록된 매장 비콘 이름과 일치해요. 일반 매장 찾기에서도 이 기기를 선택해 주세요.`
-                : `선택한 기기 이름: ${name}\n이 이름은 등록된 매장 비콘 목록에 없어요. 휴대폰의 실제 광고 이름을 ${beaconNames[0] || '등록된 매장 비콘 이름'}로 설정해 주세요.`;
-              setDiagnosis(result);
-            } catch (error) {
-              setDiagnosis(error instanceof DOMException && error.name === 'NotFoundError'
-                ? '기기를 선택하지 않았어요. 목록에 휴대폰이 없었다면 nRF Connect의 광고 실행 상태와 Connectable 설정을 확인해 주세요.'
-                : error instanceof Error ? error.message : 'BLE 기기 진단을 완료하지 못했어요.');
-            } finally {
-              setDiagnosing(false);
-            }
-          }}
-        />
-        {!!diagnosis && (
-          <View role="status" style={{ gap: 8 }}>
-            {diagnosis.split('\n').map((line, index) => <T key={index}>{line}</T>)}
-          </View>
-        )}
-        <T kind="small">
-          현재 등록된 비콘 이름: {beaconNames.join(', ') || '없음'}
-        </T>
-      </Card>
-      <Card>
-        <T kind="section">개발·테스트 연결</T>
-        <T kind="small">
-          연결을 바꾸면 장바구니와 이 기기의 최근 주문 표시가 초기화돼요. 결제
-          중에는 바꿀 수 없어요.
-        </T>
-        <Button
-          label="기기 안에서 데모 실행"
-          selected={value.mode === 'local'}
-          onPress={() => change({ mode: 'local' })}
-        />
-        <TextInput
-          accessibilityLabel="주문 서버 HTTPS 기본 주소"
-          value={address}
-          onChangeText={setAddress}
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="url"
-          style={[st.input, { color: theme.text, borderColor: theme.line }]}
-        />
-        <Button
-          label="이 서버에 연결"
-          selected={value.mode === 'server'}
-          onPress={() => {
-            try {
-              change({ serverUrl: validateServer(address), mode: 'server' });
-            } catch (e) {
-              alert(
-                '서버 주소 확인',
-                e instanceof Error ? e.message : '주소를 확인해 주세요.',
-              );
-            }
-          }}
-        />
-      </Card>
     </>
   );
 }

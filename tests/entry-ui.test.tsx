@@ -36,11 +36,12 @@ test('both discovery modes show the scanner without a second Bluetooth search bu
   }
 });
 
-test('settings exposes unfiltered diagnostics separately from normal store discovery', () => {
+test('settings keeps user preferences and navigation without automatic speech or developer tools', () => {
   const html = render('SETTINGS');
-  expect(html).toContain('BLE 기기 진단');
-  expect(html).toContain('aria-label="이름 필터 없이 BLE 기기 찾기"');
-  expect(html).toContain('LINK-KAIST, LINK-IEUM, LINK-BAKERY');
+  for (const label of ['큰 글씨', '고대비', '어두운 화면', '기본 옵션 빠르게 담기', '사용법 다시 듣기', '매장 찾기 방식 선택'])
+    expect(html).toContain(`aria-label="${label}"`);
+  for (const label of ['화면 자동 음성 안내', 'BLE 기기 진단', '이름 필터 없이 BLE 기기 찾기', '개발·테스트 연결', '주문 서버 HTTPS 기본 주소', '이 서버에 연결'])
+    expect(html).not.toContain(label);
 });
 
 test('1103: missing-store guidance contains the three ordered recovery actions, not a search form', () => {
