@@ -34,6 +34,7 @@ import type { Group, Quote, Settings } from './src/core/types';
 import { frequent, fromOrder, key, money, quote } from './src/core/domain';
 import * as Device from './src/native/browserDevice';
 import { useAppDialog } from './src/ui/dialog';
+import { staffHelpText } from './src/ui/staffHelp';
 
 type ActionButton = {
   label: string;
@@ -116,6 +117,10 @@ export default function App() {
   } catch (e) {
     cartError = e instanceof Error ? e.message : '';
   }
+  const help = () => {
+    const message = staffHelpText(s, cartQuote);
+    helpCard(message, () => app.speak(message));
+  };
   const nav = (flow: typeof s.flow) => d({ type: 'NAV', flow });
   const menu = () => nav(s.products.length > 20 ? 'V5-M1' : 'V5-05');
   const checkout = (reorder = false) =>
@@ -412,7 +417,7 @@ export default function App() {
             <InfoRow
               icon="staff"
               label="맨 아래 · 늘 같은 자리"
-              value="직원 도움"
+              value="직원에게 보여주기"
             />
           </Card>
         </>
@@ -515,10 +520,6 @@ export default function App() {
       secondary = [{ label: '매장 이름으로 찾기', run: () => nav('V5-02s') }];
       break;
     case 'V5-02e': {
-      const requestHelp = () => {
-        const message = '매장을 찾는 데 도움이 필요해요. 이 휴대폰으로 주문할 수 있는 매장인지 확인해 주세요.';
-        helpCard(message, () => app.speak(message));
-      };
       body = (
         <>
           {subtitle('아래 방법을 위에서부터 차례로 해 보세요.')}
@@ -538,7 +539,7 @@ export default function App() {
             icon="staff"
             title="주변 사람에게 도움 요청"
             description="큰 글씨 도움 카드를 화면에 띄워요"
-            onPress={requestHelp}
+            onPress={help}
           />
           <Card compact>
             <InfoRow icon="store" label="안내" value="휴대폰 주문을 지원하는 매장만 목록에 나와요" />
@@ -1370,14 +1371,6 @@ export default function App() {
       primary = { label: '설정 마치기', run: () => d({ type: 'BACK' }) };
       break;
   }
-  const help = () => {
-    const message = s.order
-      ? `주문번호 ${s.order.number} 확인을 도와주세요.`
-      : `${
-          store?.name ? store.name + '에서 ' : ''
-        }링크 앱으로 주문하는 것을 도와주세요.`;
-    helpCard(message, () => app.speak(message));
-  };
   const topLabel =
     topLabels[s.flow] || (s.flow === 'SETTINGS' ? '설정' : '링크');
   const progress = topLabel.includes('1 / 3')
@@ -1575,7 +1568,7 @@ export default function App() {
             <View style={st.grow}>
               <Button
                 appearance="utility"
-                label={/^V5-O/.test(s.flow) ? '도움 요청' : '직원 도움'}
+                label="직원에게 보여주기"
                 icon={<Icon name="staff" size={24} color={theme.text} />}
                 onPress={help}
               />
