@@ -140,8 +140,8 @@ test('09: back restores the exact menu and option screens without undoing a cart
   s = reduce(s, { type: 'SELECT_PRODUCT', id: p.id, lineId: 'one' });
   s = reduce(s, { type: 'ADD', id: 'unused' });
   expect(reduce(s, { type: 'BACK' })).toMatchObject({
-    flow: 'V5-05c',
-    message: added.message,
+    flow: 'V5-05',
+    cart: s.cart,
   });
 });
 test('09: a recent item opens the normal option screen with its saved options', () => {
@@ -284,4 +284,17 @@ test('quote equality ignores object key insertion order but detects unit price c
   };
   expect(sameQuote(q, equivalent)).toBe(true);
   expect(sameQuote(q, { ...q, total: q.total + 100 })).toBe(false);
+});
+
+test('retry starts one fresh checkout only after a confirmed terminal payment', () => {
+  const pending = reduce(cart(), { type: 'CHECKOUT', key: 'first' });
+  const payment = { id: 'p1', provider: 'demo', created: 0, snapshot: pending.request!.expected, state: 'failed' as const };
+  const failed = reduce(pending, { type: 'PAYMENT_RESULT', payment });
+  const retry = { type: 'RETRY_CHECKOUT', key: 'second' } as const;
+  const restarted = reduce(failed, retry);
+  expect(restarted.flow).toBe('V5-09');
+  expect(restarted.request?.key).toBe('second');
+  expect(restarted.payment).toBeUndefined();
+  expect(reduce(restarted, retry)).toBe(restarted);
+  expect(reduce({ ...failed, flow: 'P02-V' }, retry).flow).toBe('P02-V');
 });

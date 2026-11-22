@@ -55,6 +55,7 @@ export function Icon({
 }) {
   return (
     <Image
+      aria-hidden
       accessible={false}
       source={{ uri: artwork[name] }}
       resizeMode="contain"
@@ -67,10 +68,11 @@ export function Photo({ large = false }: { large?: boolean }) {
   const theme = useContext(ThemeContext);
   return (
     <View
+      aria-hidden
       accessible={false}
       style={[
         styles.photo,
-        { backgroundColor: theme.card },
+        { backgroundColor: theme.bg === '#F2F3F5' ? '#E1E2E6' : theme.bg },
         large && styles.largePhoto,
       ]}
     >
@@ -96,18 +98,16 @@ export function InfoRow({
   const theme = useContext(ThemeContext);
   return (
     <View
-      accessible
-      accessibilityLabel={`${label}, ${value}`}
       style={styles.infoRow}
     >
       <Icon name={icon} color={theme.text} />
       <View style={styles.copy}>
-        <T kind="small">{label}</T>
+        <T kind="small" style={{ fontSize: 15 * theme.scale, lineHeight: 21 * theme.scale, fontWeight: '500' }}>{label}</T>
         <T
           style={{
             fontSize: 20 * theme.scale,
-            lineHeight: 27 * theme.scale,
-            fontWeight: '500',
+            lineHeight: 29.4 * theme.scale,
+            fontWeight: '700',
           }}
         >
           {value}
@@ -167,9 +167,9 @@ export function NavigationRow({
       <View style={styles.copy}>
         <T
           style={{
-            fontSize: 20 * theme.scale,
-            lineHeight: 27 * theme.scale,
-            fontWeight: '500',
+            fontSize: 21 * theme.scale,
+            lineHeight: 29.4 * theme.scale,
+            fontWeight: '700',
           }}
         >
           {title}
@@ -259,8 +259,8 @@ export function OptionRow({
         <T
           style={{
             fontSize: 21 * theme.scale,
-            lineHeight: 28 * theme.scale,
-            fontWeight: '500',
+            lineHeight: 29.4 * theme.scale,
+            fontWeight: '700',
           }}
         >
           {label}
@@ -285,10 +285,12 @@ export function Stepper({
   quantity,
   onChange,
   compact = false,
+  unit = '개',
 }: {
   quantity: number;
   onChange: (value: number) => void;
   compact?: boolean;
+  unit?: string;
 }) {
   const theme = useContext(ThemeContext);
   const size = compact ? 56 : 68;
@@ -318,7 +320,7 @@ export function Stepper({
                   flex: 1,
                 }}
               >
-                {quantity}잔
+                <span aria-live="polite" aria-atomic="true">{quantity}{unit}</span>
               </T>
             )}
             <Pressable
@@ -387,7 +389,7 @@ export function CartBar({
       <Icon name="bag" color="#FFFFFF" />
       <View style={styles.copy}>
         <T style={styles.cartText}>
-          {quantity ? `장바구니 ${quantity}잔` : '장바구니 비어 있음'}
+          {quantity ? `장바구니 ${quantity}개` : '장바구니 비어 있음'}
         </T>
         <T kind="section" style={{ color: '#FFFFFF' }}>
           {total}
@@ -411,15 +413,15 @@ const styles = StyleSheet.create({
   photo: {
     width: 72,
     height: 72,
-    borderRadius: 20,
+    borderRadius: 8,
     justifyContent: 'center',
     alignItems: 'center',
   },
   largePhoto: { width: '100%', height: 190, gap: 6 },
   infoRow: {
-    minHeight: 69,
+    minHeight: 72,
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 12,
     paddingVertical: 8,
   },
@@ -432,7 +434,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 14,
   },
-  menuRow: { minHeight: 103, paddingLeft: 14, paddingRight: 10 },
+  menuRow: { minHeight: 105, paddingLeft: 14, paddingRight: 10 },
   tag: {
     color: '#FFFFFF',
     backgroundColor: '#191919',
@@ -466,7 +468,7 @@ const styles = StyleSheet.create({
     gap: 12,
     alignItems: 'center',
   },
-  cartText: { color: '#FFFFFF', fontWeight: '500', fontSize: 15 },
+  cartText: { color: '#FFFFFF', fontWeight: '700', fontSize: 15 },
   cartGo: {
     minHeight: 44,
     borderRadius: 10,

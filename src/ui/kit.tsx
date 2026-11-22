@@ -1,6 +1,6 @@
 import React, { createContext, useContext } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-export const fontFamily = 'LinkNoto, sans-serif';
+export const fontFamily = 'Pretendard, LinkNoto, sans-serif';
 export type Theme = {
   bg: string;
   card: string;
@@ -16,9 +16,9 @@ export const light: Theme = {
   bg: '#F2F3F5',
   card: '#FFFFFF',
   text: '#191919',
-  muted: '#555555',
+  muted: '#4D4D4D',
   line: '#767676',
-  selected: '#FFF7CC',
+  selected: '#FFF6BF',
   danger: '#A91D26',
   scale: 1,
   contrast: false,
@@ -33,7 +33,7 @@ export function T({
   kind?: 'title' | 'section' | 'body' | 'small';
 } & React.ComponentProps<typeof Text>) {
   const t = useContext(ThemeContext);
-  const sizes = { title: 26, section: 21, body: 17, small: 16 };
+  const sizes = { title: 26, section: 20, body: 17, small: 17 };
   return (
     <Text
       {...props}
@@ -41,7 +41,7 @@ export function T({
         {
           color: kind === 'small' ? t.muted : t.text,
           fontSize: sizes[kind] * t.scale,
-          lineHeight: Math.round(sizes[kind] * t.scale * 1.35),
+          lineHeight: Math.round(sizes[kind] * t.scale * 1.4),
           fontWeight: kind === 'title' || kind === 'section' ? '700' : '400',
           flexShrink: 1,
           includeFontPadding: false,
@@ -66,9 +66,9 @@ export function Card({
     <View
       style={{
         backgroundColor: t.card,
-        borderRadius: 20,
+        borderRadius: 16,
         paddingHorizontal: 24,
-        paddingVertical: compact ? 10 : 16,
+        paddingVertical: compact ? 12 : 16,
         gap: compact ? 2 : 12,
         borderWidth: t.contrast ? 2 : 0,
         borderColor: t.line,
@@ -128,12 +128,8 @@ export function Button({
           ? t.selected
           : dark
           ? '#191919'
-          : utility
-          ? t.card
-          : t.bg === light.bg
-          ? '#E4E5E9'
           : t.card,
-        borderWidth: selected || (t.contrast && !primary) ? 2 : 0,
+        borderWidth: primary ? 0 : selected || compact || t.contrast ? 2 : 1.5,
         borderColor: selected ? t.text : t.line,
         opacity: disabled ? 0.45 : pressed ? 0.65 : 1,
       })}
@@ -144,8 +140,8 @@ export function Button({
           textAlign: 'center',
           color: primary ? '#000000' : dark ? '#FFFFFF' : t.text,
           fontSize: (utility ? 18 : compact ? 17 : 21) * t.scale,
-          lineHeight: (utility ? 24 : compact ? 23 : 28) * t.scale,
-          fontWeight: utility ? '500' : '700',
+          lineHeight: (utility ? 18 : compact ? 17 : 21) * 1.4 * t.scale,
+          fontWeight: '700',
         }}
       >
         {selected ? '✓ ' : ''}
@@ -166,14 +162,11 @@ export const styles = StyleSheet.create({
     paddingVertical: 12,
     fontSize: 17,
   },
-  footer: {
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 8,
-    gap: 10,
-  },
   header: {
-    paddingHorizontal: 16,
+    paddingLeft: 12,
+    paddingRight: 20,
+    minHeight: 80,
+    paddingVertical: 12,
     flexDirection: 'row',
     gap: 8,
     alignItems: 'center',
@@ -181,8 +174,8 @@ export const styles = StyleSheet.create({
   chip: {
     paddingHorizontal: 6,
     paddingVertical: 8,
-    minHeight: 48,
-    minWidth: 48,
+    minHeight: 52,
+    minWidth: 52,
     justifyContent: 'center',
   },
 });

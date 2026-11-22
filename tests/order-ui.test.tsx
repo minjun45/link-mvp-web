@@ -33,17 +33,18 @@ test('menu search field is named by its purpose; the example stays visible but h
 
 test('sold-out menu reads its name and 품절 as one disabled button', () => {
   const html = render('V5-05', { category: product('디카페인 커피').category });
-  const row = html.match(/<[^>]*aria-label="디카페인 커피, 품절"[^>]*>/)?.[0];
+  const row = html.match(/<[^>]*aria-label="디카페인 커피, 품절, 오늘 준비 수량 소진"[^>]*>/)?.[0];
   expect(row).toBeDefined();
   expect(row).toContain('role="button"');
   expect(row).toContain('aria-disabled="true"');
 });
 
-test('step progress bar is decorative; the step label carries the information', () => {
+test('page heading identifies the store without a redundant step label', () => {
   const html = render('V5-05');
   expect(html).not.toContain('role="progressbar"');
   expect(html).not.toContain('주문 진행 단계');
-  expect(html).toContain('1 / 3');
+  expect(html).not.toContain('1 / 3');
+  expect(html).toContain(catalog.stores[0].name);
 });
 
 test('option groups say 필수 / 선택 instead of long phrases', () => {

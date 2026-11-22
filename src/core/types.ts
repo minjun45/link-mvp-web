@@ -126,6 +126,7 @@ export type Flow =
 export type Settings = {
   dark: boolean;
   contrast: boolean;
+  staffHelp: boolean;
   large: boolean;
   quickOptions: boolean;
   mode: 'local' | 'server';

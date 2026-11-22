@@ -89,10 +89,10 @@ test('1103: store confirmation displays wait data when provided and never invent
   expect(html).toContain('앞 주문 2건 · 약 5분');
   expect(html).toContain('이 매장에서 주문');
   expect(html).toContain('다른 매장 찾기');
-  // Keep the PR's short screen-reader route without losing local wait data.
+  // Read the store details in the same order as the visible confirmation screen.
   const action = html.indexOf('aria-label="이 매장에서 주문"');
   expect(html.indexOf(catalog.stores[0].name)).toBeLessThan(action);
-  expect(action).toBeLessThan(html.indexOf(catalog.stores[0].address));
+  expect(action).toBeGreaterThan(html.indexOf(catalog.stores[0].address));
   expect(html.match(/data-testid="primary-action"/g)).toHaveLength(1);
 });
 
@@ -101,7 +101,9 @@ test('footer has no shared replay button; order screens keep their own replay ac
   for (const flow of ['START', 'V5-O2', 'V5-05', 'V5-08', 'SETTINGS'] as const) {
     const html = render(flow, extra);
     expect(html).not.toContain('aria-label="다시 듣기"');
-    expect(html).toContain('aria-label="직원에게 보여주기"');
+    expect(html).not.toContain('aria-label="직원 도움"');
+    expect(render(flow, { ...extra, settings: { ...initial.settings, staffHelp: true } }))
+      .toContain('aria-label="직원 도움"');
   }
   expect(render('V5-O4')).not.toContain('맨 아래 왼쪽 다시 듣기');
   const order: Order = {

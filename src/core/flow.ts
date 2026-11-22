@@ -13,6 +13,7 @@ import { defaults, initialOptions, quote, fromOrder } from './domain';
 export const settings: Settings = {
   dark: false,
   contrast: false,
+  staffHelp: false,
   large: false,
   quickOptions: false,
   mode: 'local',
@@ -84,6 +85,7 @@ export type Action =
   | { type: 'PAYMENT_READY'; payment: Payment }
   | { type: 'PAYMENT_RESULT'; payment: Payment; order?: Order }
   | { type: 'RETRY_PAYMENT' }
+  | { type: 'RETRY_CHECKOUT'; key: string }
   | { type: 'ORDER_UPDATED'; order: Order }
   | { type: 'OPEN_ORDER' }
   | { type: 'PICKUP_COMPLETE' }
@@ -254,6 +256,15 @@ export function reduce(s: State, a: Action): State {
       case 'STORES':
         return { ...s, stores: a.stores, discoveryReady: true };
       case 'NAV':
+        // Dismissing the added-item sheet should not reopen it on Back.
+        if (s.flow === 'V5-05c' && ['V5-05', 'V5-M1', 'V5-08'].includes(a.flow)) {
+          const menuIndex = s.backStack.map(entry => entry.flow).lastIndexOf('V5-05');
+          const previous = s.backStack[menuIndex];
+          const menu = previous
+            ? { ...goto(s, previous.flow), ...previous, backStack: s.backStack.slice(0, menuIndex) }
+            : { ...goto(s, entryMenu(s.products)), backStack: [] };
+          return a.flow === 'V5-08' ? visit(menu, a.flow) : menu;
+        }
         if (a.flow === 'START')
           return s.request || s.payment ? goto(s, 'P02-V') : start(s);
         if (a.flow === 'BLE_GUIDE')
@@ -517,9 +528,16 @@ export function reduce(s: State, a: Action): State {
               : x,
           ),
         };
+      case 'RETRY_CHECKOUT':
       case 'CHECKOUT': {
-        if (s.request || s.payment) return goto(s, 'P02-V');
-        const cart = a.reorder ? fromOrder(s.history[s.storeId!]) : s.cart;
+        if (a.type === 'RETRY_CHECKOUT') {
+          const terminal = (s.flow === 'P02-C' && s.payment?.state === 'cancelled') ||
+            (s.flow === 'P02-F' && s.payment?.state === 'failed');
+          if (!terminal) return s;
+        } else if (s.request || s.payment) {
+          return goto(s, 'P02-V');
+        }
+        const cart = a.type === 'CHECKOUT' && a.reorder ? fromOrder(s.history[s.storeId!]) : s.cart;
         const expected = quote(
           s.stores.find(x => x.id === s.storeId),
           s.products,
@@ -527,6 +545,7 @@ export function reduce(s: State, a: Action): State {
         );
         return {
           ...goto(s, 'V5-09'),
+          payment: undefined,
           cart,
           request: {
             key: a.key,

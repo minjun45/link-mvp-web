@@ -1,9 +1,7 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useContext, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
-  ScrollView,
-  Switch,
   Text,
   TextInput,
   useWindowDimensions,
@@ -30,7 +28,7 @@ import {
   Photo,
   Stepper,
 } from './src/ui/figma';
-import type { Group, Quote, Settings } from './src/core/types';
+import type { Group, PricedLine, Quote, Settings } from './src/core/types';
 import { frequent, fromOrder, key, money, quote } from './src/core/domain';
 import * as Device from './src/native/browserDevice';
 import { useAppDialog } from './src/ui/dialog';
@@ -44,6 +42,10 @@ type ActionButton = {
 };
 function menuSearchKey(text: string) {
   return text.replace(/\s+/g, '').replace(/라떼/g, '라테');
+}
+
+function unitFor(category?: string) {
+  return category === '커피' || category === '음료' ? '잔' : '개';
 }
 
 export default function App() {
@@ -69,14 +71,35 @@ export default function App() {
           muted: s.settings.dark ? '#FFFFFF' : '#111111',
         }
       : {}),
-    scale: s.settings.large ? 1.25 : 1,
+    scale: s.settings.large ? 1 : 0.9,
     contrast: s.settings.contrast,
   };
   const { alert, helpCard, dialog } = useAppDialog(theme);
   const entryScreen = ['START', 'BLE_GUIDE', 'V5-01', 'V5-01e', 'V5-02', 'V5-02e', 'V5-02s', 'V5-03', 'V5-04'].includes(s.flow);
   const heading = useRef<React.ComponentRef<typeof Text>>(null);
-  const scroll = useRef<React.ComponentRef<typeof ScrollView>>(null);
-  const previousScreen = useRef({ flow: s.flow, revision: s.revision });
+  const scroll = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [titleScrolled, setTitleScrolled] = useState(false);
+  useEffect(() => {
+    const viewport = scroll.current;
+    const surface = content.current;
+    if (!viewport || !surface) return;
+    const measure = () => {
+      setHasMore(viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight > 2);
+      const rect = (heading.current as unknown as HTMLElement | null)?.getBoundingClientRect();
+      setTitleScrolled(!!rect && rect.bottom <= viewport.getBoundingClientRect().top);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(viewport);
+    observer.observe(surface);
+    viewport.addEventListener('scroll', measure, { passive: true });
+    return () => {
+      viewport.removeEventListener('scroll', measure);
+      observer.disconnect();
+    };
+  }, [s.flow, s.revision]);
   const store = s.stores.find(
     x => x.id === (s.flow === 'V5-03' ? s.selectedStoreId : s.storeId),
   );
@@ -85,19 +108,15 @@ export default function App() {
     s.step
   ];
   const title =
-    s.flow === 'V5-05c' && s.message
-      ? s.message
-      : s.flow === 'V5-M3'
+    s.flow === 'V5-M3'
       ? `${wizardGroup?.name || '옵션'}을 골라 주세요`
       : s.flow === 'V5-02'
       ? `매장 ${s.found.length}곳을 찾았어요`
       : s.flow === 'V5-05' && store
-      ? `${store.name} · 메뉴 ${categories.length}개 분류, ${s.products.length}개`
-      : s.flow === 'V5-08' && s.cart.length
-      ? `장바구니 · ${s.cart.length}종류 ${s.cart.reduce(
-          (n, l) => n + l.quantity,
-          0,
-        )}잔`
+      ? store.name
+      : ['V5-06', 'V5-08e', 'V5-05c'].includes(s.flow)
+      ? s.products.find(p => p.id === s.productId)?.name || titles[s.flow]
+      : s.flow === 'V5-08' ? '장바구니'
       : titles[s.flow];
   const product = s.products.find(x => x.id === s.productId);
   const selectedTotal = product
@@ -134,27 +153,13 @@ export default function App() {
     : nav('BLE_GUIDE');
   const add = () => d({ type: 'ADD', id: key() });
   useEffect(() => {
-    const previous = previousScreen.current;
-    previousScreen.current = { flow: s.flow, revision: s.revision };
-    const sameVisit = previous.revision === s.revision;
-    const inlineMenuUpdate = previous.flow === 'V5-05c' && s.flow === 'V5-05';
-    const pickupReady = previous.flow === 'V5-11' && s.flow === 'V5-12';
-    if (sameVisit && (inlineMenuUpdate || pickupReady)) return;
     // The browser owns focus while its Bluetooth device chooser is open.
-    if (s.flow === 'V5-01' && s.discovery === 'ble') return;
+    if ((s.flow === 'V5-01' && s.discovery === 'ble') || s.flow === 'V5-05c') return;
 
-    scroll.current?.scrollTo({ y: 0, animated: false });
+    scroll.current?.scrollTo({ top: 0 });
     const titleNode = heading.current as unknown as HTMLElement | null;
     titleNode?.setAttribute('tabindex', '-1');
-    // The footer button that was just pressed stays in place with a new label,
-    // so a screen reader keeps its cursor there. Release it and move focus to
-    // the title after the press has finished.
-    const timer = window.setTimeout(() => {
-      const active = document.activeElement as HTMLElement | null;
-      if (active && active !== titleNode) active.blur();
-      titleNode?.focus({ preventScroll: true });
-    }, 80);
-    return () => window.clearTimeout(timer);
+    titleNode?.focus({ preventScroll: true });
   }, [s.flow, s.revision]);
   useEffect(() => {
     if (s.error === 'CHANGE_STORE')
@@ -182,7 +187,7 @@ export default function App() {
           paddingLeft: entryScreen ? 16 : 8,
           paddingRight: 8,
           paddingVertical: 6,
-          borderWidth: entryScreen && !theme.contrast ? 0 : 2,
+          borderWidth: 2,
         },
       ]}
     >
@@ -224,7 +229,7 @@ export default function App() {
       </View>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="음성으로 검색"
+        accessibilityLabel="말하기"
         onPress={app.voiceSearch}
         style={({ pressed }) => ({
           minHeight: 48,
@@ -255,14 +260,14 @@ export default function App() {
       style={{
         color: theme.muted,
         fontSize: 21 * theme.scale,
-        lineHeight: 32 * theme.scale,
+        lineHeight: 29.4 * theme.scale,
       }}
     >
       {text}
     </T>
   );
   const sectionLabel = (text: string) => (
-    <T style={{ color: theme.muted, fontWeight: '700', ...(entryScreen ? { fontSize: 15 * theme.scale, lineHeight: 20 * theme.scale } : {}) }}>{text}</T>
+    <h2 className="section-heading" style={{ fontSize: 20 * theme.scale }}>{text}</h2>
   );
   const options = (groups: Group[]) => (
     <View style={st.stack}>
@@ -297,19 +302,21 @@ export default function App() {
       ))}
     </View>
   );
+  const unit = unitFor(product?.category);
   const quantity = (
     <View style={st.stack}>
       {sectionLabel('수량')}
       <Stepper
         quantity={s.quantity}
+        unit={unit}
         onChange={value => d({ type: 'QUANTITY', value })}
       />
     </View>
   );
+  const productHeading = ['V5-06', 'V5-08e', 'V5-05c'].includes(s.flow);
   const productSummary = product && (
     <>
-      <Photo large />
-      <T kind="title">{product.name}</T>
+      {!productHeading && <><Photo large /><T kind="title">{product.name}</T></>}
       <T style={{ fontSize: 20 * theme.scale, fontWeight: '700' }}>
         기본 {money(product.price)}
       </T>
@@ -417,23 +424,23 @@ export default function App() {
           <Card compact>
             <InfoRow
               icon="store"
-              label="맨 위 · 제목"
+              label="화면 제목"
               value="지금 무슨 화면인지"
             />
             <InfoRow
               icon="cup"
-              label="가운데 · 내용"
+              label="화면 내용"
               value="매장 정보 · 메뉴 · 선택지"
             />
             <InfoRow
               icon="bag"
-              label="아래 · 노란 버튼"
+              label="주요 버튼"
               value="다음 단계로 가기"
             />
             <InfoRow
               icon="staff"
-              label="맨 아래 · 늘 같은 자리"
-              value="직원에게 보여주기"
+              label="직원 도움"
+              value="설정에서 ‘직원에게 보여주기’를 켜면 사용할 수 있어요"
             />
           </Card>
         </>
@@ -476,7 +483,7 @@ export default function App() {
     case 'V5-O4':
       body = (
         <>
-          {subtitle('아래 노란 버튼을 찾아 눌러 보세요.')}
+          {subtitle('‘연습 · 여기를 눌러 보기’ 버튼을 눌러 보세요.')}
           {sectionLabel('연습이 끝나면')}
           <Card compact>
             <InfoRow icon="bag" label="성공하면" value="가벼운 진동과 안내" />
@@ -625,18 +632,10 @@ export default function App() {
       break;
     }
     case 'V5-03':
-      // The store name is enough to confirm, so the order button comes right
-      // after it. Screen reader users reach it without passing every detail.
+      primary = store ? { label: '이 매장에서 주문', run: () => d({ type: 'CONFIRM_STORE' }) } : undefined;
       body = store ? (
-        <>
-          <T kind="section">{store.name}</T>
-          <Button
-            testID="primary-action"
-            primary
-            label="이 매장에서 주문"
-            onPress={() => d({ type: 'CONFIRM_STORE' })}
-          />
           <Card compact>
+            <InfoRow icon="store" label="매장" value={store.name} />
             <InfoRow icon="pin" label="주소" value={store.address} />
             <InfoRow icon="clock" label="영업" value={store.hours} />
             <InfoRow
@@ -650,7 +649,6 @@ export default function App() {
               value={store.wait ? `앞 주문 ${store.wait.ordersAhead}건 · 약 ${store.wait.minutes}분` : '매장에서 확인해 주세요'}
             />
           </Card>
-        </>
       ) : (
         <T>매장을 다시 선택해 주세요.</T>
       );
@@ -725,8 +723,7 @@ export default function App() {
       break;
     }
     case 'V5-M1':
-    case 'V5-05':
-    case 'V5-05c': {
+    case 'V5-05': {
       primary = {
         label: s.cart.length
           ? `장바구니 보기 · ${cartQuote?.quantity || s.cart.length}개 · ${money(
@@ -763,11 +760,12 @@ export default function App() {
         break;
       }
       const query = menuSearchKey(s.query);
+      const groupedMenu = !query && categories.length <= 3 && s.products.length <= 20;
       const items = s.products
         .filter(p =>
           query
             ? menuSearchKey(p.name).includes(query)
-            : !s.category || p.category === s.category,
+            : groupedMenu || !s.category || p.category === s.category,
         )
         .sort(
           (a, b) => Number(Boolean(b.popular)) - Number(Boolean(a.popular)),
@@ -781,48 +779,49 @@ export default function App() {
       const recent = frequent(last, s.products);
       body = (
         <>
-          {s.flow === 'V5-05c' &&
-            subtitle('더 고르거나 아래 장바구니에서 결제하세요.')}
           {search('메뉴 이름 (예: 라떼)', '메뉴 이름으로 찾기')}
           {!query && recent.length > 0 && (
-            <>
-              {sectionLabel(`자주 시킨 메뉴 · ${recent.length}개`)}
-              {recent.map(p => {
-                const line = last?.snapshot.items.find(
-                  i => i.productId === p.id,
-                );
-                return (
-                  <NavigationRow
-                    key={p.id}
-                    photo
-                    title={p.name}
-                    description={
-                      line
-                        ? [...line.labels, '지난번 그대로'].join(' · ')
-                        : undefined
-                    }
-                    price={line ? money(line.unitPrice) : undefined}
-                    onPress={() =>
-                      d({ type: 'SELECT_PRODUCT', id: p.id, recent: true })
-                    }
-                  />
-                );
-              })}
-            </>
+            <details className="frequent-menu" key={s.storeId}>
+              <summary>자주 시킨 메뉴 {recent.length}개<span aria-hidden="true" /></summary>
+              <div className="menu-items">
+                {recent.map(p => {
+                  const line = last?.snapshot.items.find(
+                    i => i.productId === p.id,
+                  );
+                  return (
+                    <NavigationRow
+                      key={p.id}
+                      photo
+                      title={p.name}
+                      description={
+                        line
+                          ? [...line.labels, '지난번 그대로'].join(' · ')
+                          : undefined
+                      }
+                      price={line ? money(line.unitPrice) : undefined}
+                      onPress={() =>
+                        d({ type: 'SELECT_PRODUCT', id: p.id, recent: true })
+                      }
+                    />
+                  );
+                })}
+              </div>
+            </details>
           )}
+          {!query && categories.length > 0 && <div className="section-divider" />}
           {!query &&
             categories.length > 0 &&
             (categories.length <= 3 ? (
-              <View accessibilityRole="radiogroup" accessibilityLabel="메뉴 분류" style={st.row}>
+              <div className="category-tabs" role="radiogroup" aria-label="메뉴 분류">
                 {categories.map(c => {
-                  const selected = c === s.category;
+                  const selected = c === (s.category || categories[0]);
                   return (
                     <View
                       key={c}
                       style={{
                         flex: 1,
-                        minHeight: 56,
-                        borderRadius: 12,
+                        minHeight: 48,
+                        borderRadius: 999,
                         justifyContent: 'center',
                         backgroundColor: selected ? '#191919' : theme.card,
                         borderWidth: theme.contrast ? 2 : 0,
@@ -845,37 +844,47 @@ export default function App() {
                         name="menu-category"
                         label={c}
                         selected={selected}
-                        onChange={() => d({ type: 'CATEGORY', value: c })}
+                        onChange={() => {
+                          d({ type: 'CATEGORY', value: c });
+                          if (groupedMenu) document.getElementById(`menu-section-${categories.indexOf(c)}`)?.scrollIntoView({ block: 'start' });
+                        }}
                       />
                     </View>
                   );
                 })}
-              </View>
+              </div>
             ) : (
               <Button label="메뉴 분류 선택" onPress={() => nav('V5-M1')} />
             ))}
-          {sectionLabel(
-            query
-              ? '검색 결과'
-              : `${s.category || '전체 메뉴'} · ${items.length}개`,
-          )}
-          {items.slice(0, s.menuLimit).map(p => (
-            <NavigationRow
-              key={p.id}
-              photo
-              title={p.name}
-              description={p.soldOut ? '오늘 준비 수량 소진' : p.description}
-              price={p.soldOut ? undefined : money(p.price)}
-              tag={p.soldOut ? '품절' : undefined}
-              label={p.soldOut ? `${p.name}, 품절` : undefined}
-              disabled={p.soldOut}
-              onPress={() => d({ type: 'SELECT_PRODUCT', id: p.id })}
-            />
-          ))}
+          {(query ? ['검색 결과'] : groupedMenu || !s.category ? categories : [s.category]).map(group => {
+            const groupItems = query ? items : items.filter(p => p.category === group);
+            const visible = groupedMenu ? groupItems : groupItems.slice(0, s.menuLimit);
+            if (!visible.length) return null;
+            return (
+              <section className="menu-group" key={group} id={`menu-section-${categories.indexOf(group)}`}>
+                {sectionLabel(query ? group : `${group} · ${groupItems.length}개`)}
+                <div className="menu-items">
+                  {visible.map(p => (
+                    <NavigationRow
+                      key={p.id}
+                      photo
+                      title={p.name}
+                      description={p.soldOut ? '오늘 준비 수량 소진' : p.description}
+                      price={p.soldOut ? undefined : money(p.price)}
+                      tag={p.soldOut ? '품절' : undefined}
+                      label={p.soldOut ? `${p.name}, 품절, 오늘 준비 수량 소진` : undefined}
+                      disabled={p.soldOut}
+                      onPress={() => d({ type: 'SELECT_PRODUCT', id: p.id })}
+                    />
+                  ))}
+                </div>
+              </section>
+            );
+          })}
           {!items.length && (
             <T>일치하는 메뉴가 없어요. 다른 이름으로 찾아 주세요.</T>
           )}
-          {items.length > s.menuLimit && (
+          {!groupedMenu && items.length > s.menuLimit && (
             <Button
               label="메뉴 5개 더 듣기"
               onPress={() => {
@@ -888,6 +897,17 @@ export default function App() {
       );
       break;
     }
+    case 'V5-05c':
+      body = <>
+        {productSummary}
+        <AddedSheet
+          summary={cartQuote?.items[cartQuote.items.length - 1]}
+          total={cartQuote?.total}
+          menu={menu}
+          cart={() => nav('V5-08')}
+        />
+      </>;
+      break;
     case 'V5-06':
     case 'V5-08e':
       body = (
@@ -900,14 +920,14 @@ export default function App() {
             <T
               style={{
                 fontSize: 36 * theme.scale,
-                lineHeight: 43 * theme.scale,
+                lineHeight: 50.4 * theme.scale,
                 fontWeight: '700',
               }}
             >
               {money(selectedTotal)}
             </T>
             <T kind="small">
-              {money(selectedTotal / s.quantity)} × {s.quantity}잔
+              1{unit}당 {money(selectedTotal / s.quantity)} · 총 {s.quantity}{unit}
               {product?.options.some(g => g.id === 'temperature') &&
               !s.selected.temperature
                 ? ' · 온도를 먼저 골라 주세요'
@@ -918,7 +938,7 @@ export default function App() {
       );
       primary = {
         label: s.editId
-          ? '변경 저장'
+          ? `변경 사항 저장 · ${money(selectedTotal)}`
           : `${money(selectedTotal)} 장바구니에 담기`,
         run: add,
       };
@@ -981,6 +1001,7 @@ export default function App() {
           {store && (
             <Card compact>
               <InfoRow icon="store" label="주문 매장" value={store.name} />
+              <InfoRow icon="bag" label="담은 메뉴" value={`${s.cart.length}종류 · 총 ${s.cart.reduce((n, line) => n + line.quantity, 0)}개`} />
             </Card>
           )}
           {!s.cart.length && (
@@ -1009,6 +1030,7 @@ export default function App() {
               <Stepper
                 compact
                 quantity={l.quantity}
+                unit={unitFor(s.products.find(p => p.id === l.productId)?.category)}
                 onChange={value =>
                   d({
                     type: 'CART_QUANTITY',
@@ -1045,6 +1067,7 @@ export default function App() {
           <Button label="+ 메뉴 더 담기" onPress={menu} />
           {cartQuote && (
             <>
+              <div className="section-divider" />
               {sectionLabel('결제 정보')}
               <Card compact>
                 <InfoRow
@@ -1162,9 +1185,18 @@ export default function App() {
         run: () => d({ type: 'ACCEPT_CHANGED' }),
       };
       break;
-    case 'P01-E2':
     case 'P02-C':
     case 'P02-F':
+      body = <Card compact>
+        <InfoRow icon="card" label="결제 상태" value={s.flow === 'P02-C' ? '결제 취소' : '결제 실패'} />
+        <T>담아 둔 메뉴는 장바구니에서 확인할 수 있어요.</T>
+      </Card>;
+      if (cartQuote && s.payment?.state === (s.flow === 'P02-C' ? 'cancelled' : 'failed')) {
+        primary = { label: `다시 결제하기 · ${money(cartQuote.total)}`, run: () => d({ type: 'RETRY_CHECKOUT', key: key() }) };
+      }
+      secondary = [{ label: '장바구니로 돌아가기', run: () => d({ type: 'RETRY_PAYMENT' }) }];
+      break;
+    case 'P01-E2':
     case 'P02-T':
       body = (
         <Card>
@@ -1238,8 +1270,8 @@ export default function App() {
           {subtitle(`${s.order.snapshot.storeName} · 주문번호`)}
           <T
             style={{
-              fontSize: 42 * theme.scale,
-              lineHeight: 52 * theme.scale,
+              fontSize: 60 * theme.scale,
+              lineHeight: 84 * theme.scale,
               fontWeight: '700',
             }}
           >
@@ -1308,7 +1340,7 @@ export default function App() {
               icon="cup"
               label="주문 상품"
               value={s.order.snapshot.items
-                .map(x => `${x.name} ${x.quantity}잔`)
+                .map(x => [x.name, ...x.labels, `${x.quantity}${unitFor(s.products.find(p => p.id === x.productId)?.category)}`].join(' '))
                 .join(' · ')}
             />
             <InfoRow
@@ -1348,7 +1380,7 @@ export default function App() {
               style={{
                 color: '#FFFFFF',
                 fontSize: 60 * theme.scale,
-                lineHeight: 69 * theme.scale,
+                lineHeight: 84 * theme.scale,
                 fontWeight: '700',
               }}
             >
@@ -1370,7 +1402,7 @@ export default function App() {
       };
       secondary = [
         {
-          label: '받았어요 · 픽업 완료',
+          label: '픽업 완료',
           run: () => d({ type: 'PICKUP_COMPLETE' }),
         },
       ];
@@ -1388,20 +1420,14 @@ export default function App() {
       primary = { label: '설정 마치기', run: () => d({ type: 'BACK' }) };
       break;
   }
-  const topLabel =
-    topLabels[s.flow] || (s.flow === 'SETTINGS' ? '설정' : '링크');
-  const progress = topLabel.includes('1 / 3')
-    ? 1
-    : topLabel.includes('2 / 3')
-    ? 2
-    : topLabel.includes('3 / 3')
-    ? 3
-    : 0;
-  const cartScreen = ['V5-05', 'V5-05c', 'V5-M1'].includes(s.flow);
+  const shortTitle = s.flow === 'V5-05' || s.flow === 'V5-06' ? title
+    : s.flow === 'V5-08' ? '장바구니' : s.flow === 'V5-11' ? '주문 준비 중'
+    : topLabels[s.flow]?.replace(/^\d \/ \d\s*/, '') || title;
+  const cartScreen = ['V5-05', 'V5-M1'].includes(s.flow);
   const pinSecondary =
     height >= 650 &&
     fontScale * theme.scale < 1.5 &&
-    ['START', 'BLE_GUIDE', 'V5-O1', 'V5-O4', 'V5-01e', 'V5-03', 'V5-R1', 'V5-06s', 'V5-12'].includes(s.flow);
+    ['START', 'BLE_GUIDE', 'V5-O1', 'V5-O4', 'V5-01e', 'V5-03', 'V5-R1', 'V5-06s', 'V5-12', 'P02-C', 'P02-F'].includes(s.flow);
   const hero =
     s.flow === 'START'
       ? 'store'
@@ -1418,14 +1444,14 @@ export default function App() {
     s.flow === 'P02-V' || s.flow === 'V5-05c' ? '' : s.message;
   return (
     <ThemeContext.Provider value={theme}>
-      <div className={`app-frame${entryScreen ? ' entry-frame' : ''}`} data-flow={s.flow} style={{ backgroundColor: theme.bg }}>
+      <div className={`app-frame${entryScreen ? ' entry-frame' : ''}`} data-flow={s.flow} style={{ backgroundColor: theme.bg, color: theme.text, '--page': theme.bg, '--card': theme.card, '--divider': s.settings.dark ? theme.line : '#DCDDE2', '--muted': theme.muted, '--line': theme.line, '--scale': theme.scale } as React.CSSProperties}>
         <div className="visually-hidden" role="alert">
           {s.error !== 'CHANGE_STORE' ? s.error : ''}
         </div>
         <div className="visually-hidden" role="status">
           {searchStatus || screenMessage}
         </div>
-        <View style={[st.header, { minHeight: entryScreen && !['V5-01', 'V5-01e'].includes(s.flow) ? 56 : progress ? 56 : 44 }]}>
+        <View style={[st.header, { borderBottomWidth: 1.5, borderColor: titleScrolled ? (s.settings.dark ? theme.line : '#E1E2E6') : 'transparent' }]}>
           {!['BOOT', 'START', 'V5-O1'].includes(s.flow) && (
             <Pressable
               accessibilityRole="button"
@@ -1437,22 +1463,12 @@ export default function App() {
               ]}
             >
               <Icon name="back" size={30} color={theme.text} />
-              <T style={{ fontSize: 20 * theme.scale, fontWeight: '500' }}>
+              <T style={{ fontSize: 20 * theme.scale, fontWeight: '700' }}>
                 뒤로
               </T>
             </Pressable>
           )}
-          <View style={st.grow}>
-            <T
-              style={{
-                textAlign: 'right',
-                color: theme.muted,
-                fontWeight: '500',
-              }}
-            >
-              {entryScreen && ['V5-01', 'V5-01e'].includes(s.flow) ? '' : topLabel}
-            </T>
-          </View>
+          <div className="compact-title" aria-hidden="true">{titleScrolled ? shortTitle : ''}</div>
           {s.flow !== 'SETTINGS' && (
             <Pressable
               accessibilityRole="button"
@@ -1460,93 +1476,65 @@ export default function App() {
               style={[st.chip, { alignItems: 'center' }]}
               onPress={() => nav('SETTINGS')}
             >
-              <T style={{ fontSize: 22, lineHeight: 26 }}>⚙</T>
+              <T kind="section"><span aria-hidden="true">⚙ </span>설정</T>
             </Pressable>
           )}
         </View>
-        {progress > 0 && (
-          // Decorative only: the "1 / 3 …" label above already announces the step,
-          // and screen readers would otherwise add a "33%" percentage.
-          <View
-            aria-hidden
-            style={{
-              marginHorizontal: 16,
-              marginBottom: 12,
-              marginTop: 8,
-              height: 6,
-              borderRadius: 3,
-              backgroundColor: s.settings.dark ? theme.card : '#E4E5E9',
-            }}
-          >
-            <View
-              style={{
-                height: 6,
-                borderRadius: 3,
-                width: `${(progress * 100) / 3}%`,
-                backgroundColor: theme.text,
-              }}
-            />
-          </View>
-        )}
-        <ScrollView
-          ref={scroll}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={{
-            paddingHorizontal: 24,
-            paddingTop: 20,
-            gap: 16,
-            paddingBottom: 12,
-          }}
-        >
-          {hero && (
-            <Icon
-              name={hero}
-              size={hero === 'radar' ? 120 : 64}
-              color={hero === 'loading' || hero === 'alert' ? theme.text : undefined}
-            />
-          )}
-          <Text
-            ref={heading}
-            accessibilityRole="header"
-            accessible
-            style={{
-              fontSize: (s.flow === 'V5-05' ? 15 : 26) * theme.scale,
-              lineHeight: (s.flow === 'V5-05' ? 20 : 34) * theme.scale,
-              includeFontPadding: false,
-              fontFamily,
-              fontWeight: '700',
-              color: s.flow === 'V5-05' ? theme.muted : theme.text,
-            }}
-          >
-            {title}
-          </Text>
-          {!!s.error &&
-            s.error !== 'CHANGE_STORE' &&
-            !['E01', 'E02', 'E04', 'E05'].includes(s.flow) && (
-              <View>
-                <T
-                  style={{ color: s.settings.dark ? '#FFADB3' : theme.danger }}
-                >
-                  {s.error}
-                </T>
-              </View>
-            )}
-          {body}
-          {/* On the menu, filter messages ("음료 메뉴 2개") are announced by the
-              status region; repeating them under the list read as an extra item. */}
-          {!!screenMessage && s.flow !== 'V5-05' && <T>{screenMessage}</T>}
-          {!pinSecondary &&
-            secondary.map((b, i) => (
-              <Button
-                key={i}
-                label={b.label}
-                onPress={b.run}
-                disabled={b.disabled}
-              />
-            ))}
-        </ScrollView>
-        <View testID="fixed-footer" style={[st.footer, entryScreen && { paddingTop: primary ? 8 : 0, paddingBottom: 30 }]}>
+        <div className="scroll-area">
+          <div className="screen-scroll" ref={scroll}>
+            <div className="screen-content" ref={content}>
+              {hero && (
+                <Icon
+                  name={hero}
+                  size={hero === 'radar' ? 120 : 64}
+                  color={hero === 'loading' || hero === 'alert' ? theme.text : undefined}
+                />
+              )}
+              {productHeading && <Photo large />}
+              <Text
+                ref={heading}
+                accessibilityRole="header"
+                accessible
+                style={{
+                  fontSize: 26 * theme.scale,
+                  lineHeight: 36.4 * theme.scale,
+                  includeFontPadding: false,
+                  fontFamily,
+                  fontWeight: '700',
+                  color: theme.text,
+                }}
+              >
+                {title}
+              </Text>
+              {!!s.error &&
+                s.error !== 'CHANGE_STORE' &&
+                !['E01', 'E02', 'E04', 'E05'].includes(s.flow) && (
+                  <View>
+                    <T
+                      style={{ color: s.settings.dark ? '#FFADB3' : theme.danger }}
+                    >
+                      {s.error}
+                    </T>
+                  </View>
+                )}
+              {body}
+              {/* On the menu, filter messages ("음료 메뉴 2개") are announced by the
+                  status region; repeating them under the list read as an extra item. */}
+              {!!screenMessage && s.flow !== 'V5-05' && <T>{screenMessage}</T>}
+              {!pinSecondary &&
+                secondary.map((b, i) => (
+                  <Button
+                    key={i}
+                    label={b.label}
+                    onPress={b.run}
+                    disabled={b.disabled}
+                  />
+                ))}
+            </div>
+          </div>
+          {hasMore && <div aria-hidden="true" className="more-hint"><span>아래에 더 있어요</span></div>}
+        </div>
+        {(primary || (pinSecondary && secondary.length > 0) || s.settings.staffHelp) && <div className="fixed-footer" data-testid="fixed-footer">
           {primary &&
             (cartScreen ? (
               <CartBar
@@ -1581,20 +1569,42 @@ export default function App() {
                 disabled={b.disabled}
               />
             ))}
-          <View style={[st.row, { paddingTop: entryScreen ? 12 : 3 }]}>
-            <View style={st.grow}>
-              <Button
-                appearance="utility"
-                label="직원에게 보여주기"
-                icon={<Icon name="staff" size={24} color={theme.text} />}
-                onPress={help}
-              />
-            </View>
-          </View>
-        </View>
+          {s.settings.staffHelp && <Button
+            appearance="utility"
+            label="직원 도움"
+            icon={<Icon name="staff" size={24} color={theme.text} />}
+            onPress={help}
+          />}
+        </div>}
         {dialog}
       </div>
     </ThemeContext.Provider>
+  );
+}
+function AddedSheet({ summary, total, menu, cart }: {
+  summary?: PricedLine; total?: number; menu: () => void; cart: () => void;
+}) {
+  const sheet = useRef<HTMLDialogElement>(null);
+  const title = useRef<HTMLHeadingElement>(null);
+  const theme = useContext(ThemeContext);
+  useEffect(() => {
+    const el = sheet.current;
+    el?.showModal();
+    title.current?.focus();
+    return () => el?.close();
+  }, []);
+  return (
+    <dialog ref={sheet} className="added-sheet" aria-labelledby="added-title"
+      style={{ background: theme.card, color: theme.text }}
+      onCancel={event => { event.preventDefault(); menu(); }}>
+      <div>
+        <h2 id="added-title" ref={title} tabIndex={-1} className="section-heading">장바구니에 담았어요</h2>
+        {summary && <InfoRow icon="bag" label="방금 담은 메뉴"
+          value={[summary.name, ...summary.labels, `${summary.quantity}개`].join(' · ')} />}
+        <Button primary label={total === undefined ? '장바구니로 이동' : `장바구니로 이동 · ${money(total)}`} onPress={cart} />
+        <Button label="메뉴 더 고르기" onPress={menu} />
+      </div>
+    </dialog>
   );
 }
 function Receipt({ value }: { value: Quote }) {
@@ -1627,29 +1637,24 @@ function SettingsPanel({
   chooseDiscovery: () => void;
   canChooseDiscovery: boolean;
 }) {
-  const toggles: [keyof Settings, string][] = [
-    ['large', '큰 글씨'],
-    ['contrast', '고대비'],
-    ['dark', '어두운 화면'],
-    ['quickOptions', '기본 옵션 빠르게 담기'],
-  ];
+  const toggles = [
+    ['large', '큰 글씨', '글자를 더 크게'],
+    ['contrast', '고대비', '글자와 배경 대비를 더 강하게'],
+    ['dark', '어두운 화면', '검은 바탕에 밝은 글자'],
+    ['quickOptions', '기본 옵션 빠르게 담기', '옵션 화면 없이 기본값으로 담기'],
+    ['staffHelp', '직원에게 보여주기', '켜면 화면 아래에 ‘직원 도움’ 버튼이 표시돼요'],
+  ] as const;
   return (
     <>
-      <Card>
-        {toggles.map(([k, label]) => (
-          <View key={k} style={st.row}>
-            <View style={st.grow}>
-              <T>{label}</T>
-            </View>
-            <Switch
-              accessibilityLabel={label}
-              value={!!value[k]}
-              onValueChange={v => change({ [k]: v })}
-              trackColor={{ false: '#777777', true: '#B79800' }}
-            />
-          </View>
-        ))}
-      </Card>
+      {toggles.map(([k, label, detail]) => (
+        <button type="button" key={k} className="setting-row" role="switch" aria-label={label}
+          aria-checked={value[k]} aria-describedby={`setting-${k}`} onClick={() => change({ [k]: !value[k] })}>
+          <span className="setting-copy"><strong>{label}</strong><span id={`setting-${k}`}>{detail}</span></span>
+          <span className="switch-state" aria-hidden="true">
+            {value[k] ? '켬' : '끔'}<span className="switch-track" />
+          </span>
+        </button>
+      ))}
       <Button label="사용법 다시 듣기" onPress={replay} />
       <Button label="매장 찾기 방식 선택" onPress={chooseDiscovery} disabled={!canChooseDiscovery} />
     </>
