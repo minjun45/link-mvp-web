@@ -1,7 +1,6 @@
 import React, { useContext, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Pressable,
   Text,
   TextInput,
   useWindowDimensions,
@@ -227,21 +226,7 @@ export default function App() {
           returnKeyType="search"
         />
       </View>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="말하기"
-        onPress={app.voiceSearch}
-        style={({ pressed }) => ({
-          minHeight: 48,
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: 6,
-          paddingHorizontal: 10,
-          borderRadius: 12,
-          backgroundColor: '#FEE500',
-          opacity: pressed ? 0.7 : 1,
-        })}
-      >
+      <button type="button" className="app-button voice-button" onClick={app.voiceSearch}>
         <Icon name="mic" size={20} color="#191919" />
         <T
           style={{
@@ -252,7 +237,7 @@ export default function App() {
         >
           말하기
         </T>
-      </Pressable>
+      </button>
     </View>
   );
   const subtitle = (text: string) => (
@@ -1453,31 +1438,26 @@ export default function App() {
         </div>
         <View style={[st.header, { borderBottomWidth: 1.5, borderColor: titleScrolled ? (s.settings.dark ? theme.line : '#E1E2E6') : 'transparent' }]}>
           {!['BOOT', 'START', 'V5-O1'].includes(s.flow) && (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="뒤로"
-              onPress={() => d({ type: 'BACK' })}
-              style={[
-                st.chip,
-                { flexDirection: 'row', alignItems: 'center', gap: 2 },
-              ]}
+            <button
+              type="button"
+              className="app-button header-button"
+              onClick={() => d({ type: 'BACK' })}
             >
               <Icon name="back" size={30} color={theme.text} />
               <T style={{ fontSize: 20 * theme.scale, fontWeight: '700' }}>
                 뒤로
               </T>
-            </Pressable>
+            </button>
           )}
           <div className="compact-title" aria-hidden="true">{titleScrolled ? shortTitle : ''}</div>
           {s.flow !== 'SETTINGS' && (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="설정"
-              style={[st.chip, { alignItems: 'center' }]}
-              onPress={() => nav('SETTINGS')}
+            <button
+              type="button"
+              className="app-button header-button"
+              onClick={() => nav('SETTINGS')}
             >
               <T kind="section"><span aria-hidden="true">⚙ </span>설정</T>
-            </Pressable>
+            </button>
           )}
         </View>
         <div className="scroll-area">

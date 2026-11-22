@@ -33,10 +33,19 @@ test('menu search field is named by its purpose; the example stays visible but h
 
 test('sold-out menu reads its name and 품절 as one disabled button', () => {
   const html = render('V5-05', { category: product('디카페인 커피').category });
-  const row = html.match(/<[^>]*aria-label="디카페인 커피, 품절, 오늘 준비 수량 소진"[^>]*>/)?.[0];
-  expect(row).toBeDefined();
-  expect(row).toContain('role="button"');
-  expect(row).toContain('aria-disabled="true"');
+  const row = html.match(/<button\b[^>]*aria-label="디카페인 커피, 품절, 오늘 준비 수량 소진"[^>]*>/)?.[0];
+  expect(row).toMatch(/\sdisabled(?:=|\s|>)/);
+});
+
+test('native controls use their implicit tab order and buttons use their implicit role', () => {
+  for (const flow of ['START', 'V5-02s', 'V5-05', 'V5-06', 'SETTINGS'] as const) {
+    const html = render(flow, { productId: product('아메리카노').id });
+    expect(html).not.toMatch(/\srole="button"/);
+    expect(html).not.toMatch(/<(button|a|input)\b[^>]*\stabindex="0"/i);
+    const buttons = html.match(/<button\b[^>]*>/g) ?? [];
+    expect(buttons.length).toBeGreaterThan(0);
+    for (const button of buttons) expect(button).toContain('type="button"');
+  }
 });
 
 test('page heading identifies the store without a redundant step label', () => {

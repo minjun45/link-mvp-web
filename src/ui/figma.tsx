@@ -1,5 +1,5 @@
 import React, { useContext } from 'react';
-import { Image, Pressable, StyleSheet, View } from 'react-native';
+import { Image, StyleSheet, View } from 'react-native';
 import { T, ThemeContext } from './kit';
 
 import radar from './assets/radar.png';
@@ -141,27 +141,19 @@ export function NavigationRow({
 }) {
   const theme = useContext(ThemeContext);
   return (
-    <Pressable
-      accessible
-      // Stay a (disabled) button: with role "text" the browser drops the label
-      // and TalkBack reads only "사용할 수 없음".
-      accessibilityRole="button"
-      accessibilityLabel={
+    <button
+      type="button"
+      className={photo ? 'app-button nav-button menu-button' : 'app-button nav-button'}
+      aria-label={
         label || [title, description, price, tag].filter(Boolean).join(', ')
       }
-      aria-disabled={disabled}
       disabled={disabled}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.navRow,
-        photo && styles.menuRow,
-        {
-          backgroundColor: theme.card,
-          borderWidth: theme.contrast ? 2 : 0,
-          borderColor: theme.line,
-          opacity: pressed ? 0.7 : 1,
-        },
-      ]}
+      onClick={onPress}
+      style={{
+        backgroundColor: theme.card,
+        borderWidth: theme.contrast ? 2 : 0,
+        borderColor: theme.line,
+      }}
     >
       {photo ? <Photo /> : icon && <Icon name={icon} color={theme.text} />}
       <View style={styles.copy}>
@@ -192,7 +184,7 @@ export function NavigationRow({
       ) : (
         <Icon name="next" size={26} color={theme.text} />
       )}
-    </Pressable>
+    </button>
   );
 }
 
@@ -323,15 +315,15 @@ export function Stepper({
                 <span aria-live="polite" aria-atomic="true">{quantity}{unit}</span>
               </T>
             )}
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={
+            <button
+              type="button"
+              className="app-button stepper-button"
+              aria-label={
                 delta < 0 ? '수량 한 개 줄이기' : '수량 한 개 늘리기'
               }
-              aria-disabled={disabled}
               disabled={disabled}
-              onPress={() => onChange(quantity + delta)}
-              style={({ pressed }) => ({
+              onClick={() => onChange(quantity + delta)}
+              style={{
                 minWidth: size,
                 minHeight: size,
                 borderRadius: 12,
@@ -340,8 +332,7 @@ export function Stepper({
                 backgroundColor: delta === 1 ? '#191919' : theme.bg,
                 borderWidth: theme.contrast ? 2 : 0,
                 borderColor: theme.line,
-                opacity: disabled ? 0.55 : pressed ? 0.7 : 1,
-              })}
+              }}
             >
               <T
                 style={{
@@ -353,7 +344,7 @@ export function Stepper({
               >
                 {delta === 1 ? '+' : '−'}
               </T>
-            </Pressable>
+            </button>
           </React.Fragment>
         );
       })}
@@ -377,14 +368,13 @@ export function CartBar({
   disabled: boolean;
 }) {
   return (
-    <Pressable
-      testID={testID}
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      aria-disabled={disabled}
+    <button
+      type="button"
+      className="app-button cart-button"
+      data-testid={testID}
+      aria-label={label}
       disabled={disabled}
-      onPress={onPress}
-      style={({ pressed }) => [styles.cart, { opacity: pressed ? 0.8 : 1 }]}
+      onClick={onPress}
     >
       <Icon name="bag" color="#FFFFFF" />
       <View style={styles.copy}>
@@ -404,7 +394,7 @@ export function CartBar({
         <T style={{ color: '#191919', fontWeight: '700' }}>보기</T>
         <Icon name="next" size={18} color="#191919" />
       </View>
-    </Pressable>
+    </button>
   );
 }
 
@@ -434,7 +424,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 14,
   },
-  menuRow: { minHeight: 105, paddingLeft: 14, paddingRight: 10 },
   tag: {
     color: '#FFFFFF',
     backgroundColor: '#191919',
@@ -457,16 +446,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderRadius: 16,
     gap: 12,
-  },
-  cart: {
-    minHeight: 70,
-    backgroundColor: '#191919',
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    flexDirection: 'row',
-    gap: 12,
-    alignItems: 'center',
   },
   cartText: { color: '#FFFFFF', fontWeight: '700', fontSize: 15 },
   cartGo: {

@@ -39,6 +39,35 @@ html, body {
 
 button, input { font: inherit; }
 
+.app-button {
+  appearance: none;
+  box-sizing: border-box;
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0 solid transparent;
+  background: transparent;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.app-button:disabled { cursor: default; }
+.app-button:enabled:active { opacity: .7; }
+.action-button:enabled:active { opacity: .65; }
+.action-button:disabled { opacity: .45; }
+.stepper-button:disabled { opacity: .55; }
+.header-button { min-width: 52px; min-height: 52px; justify-content: center; gap: 2px; padding: 8px 6px; }
+.header-button:enabled:active { opacity: 1; }
+.voice-button { min-height: 48px; gap: 6px; padding-inline: 10px; border-radius: 12px; background: #fee500; }
+.nav-button { min-height: 87px; gap: 14px; padding: 12px 16px; border-radius: 16px; }
+.menu-button { min-height: 105px; padding-inline: 14px 10px; }
+.cart-button { min-height: 70px; gap: 12px; padding: 10px 16px; border-radius: 16px; background: #191919; }
+.cart-button:enabled:active { opacity: .8; }
+
 .app-frame, .app-dialog {
   word-break: keep-all;
   overflow-wrap: anywhere;
