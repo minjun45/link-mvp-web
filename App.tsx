@@ -75,7 +75,7 @@ export default function App() {
   };
   const { alert, helpCard, dialog } = useAppDialog(theme);
   const entryScreen = ['START', 'BLE_GUIDE', 'V5-01', 'V5-01e', 'V5-02', 'V5-02e', 'V5-02s', 'V5-03', 'V5-04'].includes(s.flow);
-  const heading = useRef<React.ComponentRef<typeof Text>>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const [hasMore, setHasMore] = useState(false);
@@ -86,7 +86,7 @@ export default function App() {
     if (!viewport || !surface) return;
     const measure = () => {
       setHasMore(viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight > 2);
-      const rect = (heading.current as unknown as HTMLElement | null)?.getBoundingClientRect();
+      const rect = heading.current?.getBoundingClientRect();
       setTitleScrolled(!!rect && rect.bottom <= viewport.getBoundingClientRect().top);
     };
     measure();
@@ -152,13 +152,9 @@ export default function App() {
     : nav('BLE_GUIDE');
   const add = () => d({ type: 'ADD', id: key() });
   useEffect(() => {
-    // The browser owns focus while its Bluetooth device chooser is open.
     if ((s.flow === 'V5-01' && s.discovery === 'ble') || s.flow === 'V5-05c') return;
 
     scroll.current?.scrollTo({ top: 0 });
-    const titleNode = heading.current as unknown as HTMLElement | null;
-    titleNode?.setAttribute('tabindex', '-1');
-    titleNode?.focus({ preventScroll: true });
   }, [s.flow, s.revision]);
   useEffect(() => {
     if (s.error === 'CHANGE_STORE')
@@ -1429,13 +1425,14 @@ export default function App() {
     s.flow === 'P02-V' || s.flow === 'V5-05c' ? '' : s.message;
   return (
     <ThemeContext.Provider value={theme}>
-      <div className={`app-frame${entryScreen ? ' entry-frame' : ''}`} data-flow={s.flow} style={{ backgroundColor: theme.bg, color: theme.text, '--page': theme.bg, '--card': theme.card, '--divider': s.settings.dark ? theme.line : '#DCDDE2', '--muted': theme.muted, '--line': theme.line, '--scale': theme.scale } as React.CSSProperties}>
-        <div className="visually-hidden" role="alert">
-          {s.error !== 'CHANGE_STORE' ? s.error : ''}
-        </div>
-        <div className="visually-hidden" role="status">
-          {searchStatus || screenMessage}
-        </div>
+      <div className="visually-hidden" role="alert">
+        {s.error !== 'CHANGE_STORE' ? s.error : ''}
+      </div>
+      <div className="visually-hidden" role="status">
+        {searchStatus || screenMessage}
+      </div>
+      {/* A fresh screen lets Tab start at the top without moving focus to the heading. */}
+      <div key={`${s.flow}:${s.revision}`} className={`app-frame${entryScreen ? ' entry-frame' : ''}`} data-flow={s.flow} style={{ backgroundColor: theme.bg, color: theme.text, '--page': theme.bg, '--card': theme.card, '--divider': s.settings.dark ? theme.line : '#DCDDE2', '--muted': theme.muted, '--line': theme.line, '--scale': theme.scale } as React.CSSProperties}>
         <View style={[st.header, { borderBottomWidth: 1.5, borderColor: titleScrolled ? (s.settings.dark ? theme.line : '#E1E2E6') : 'transparent' }]}>
           {!['BOOT', 'START', 'V5-O1'].includes(s.flow) && (
             <button
@@ -1471,21 +1468,9 @@ export default function App() {
                 />
               )}
               {productHeading && <Photo large />}
-              <Text
-                ref={heading}
-                accessibilityRole="header"
-                accessible
-                style={{
-                  fontSize: 26 * theme.scale,
-                  lineHeight: 36.4 * theme.scale,
-                  includeFontPadding: false,
-                  fontFamily,
-                  fontWeight: '700',
-                  color: theme.text,
-                }}
-              >
+              <h1 ref={heading} className="section-heading" style={{ fontSize: 26 * theme.scale }}>
                 {title}
-              </Text>
+              </h1>
               {!!s.error &&
                 s.error !== 'CHANGE_STORE' &&
                 !['E01', 'E02', 'E04', 'E05'].includes(s.flow) && (
@@ -1556,8 +1541,8 @@ export default function App() {
             onPress={help}
           />}
         </div>}
-        {dialog}
       </div>
+      {dialog}
     </ThemeContext.Provider>
   );
 }

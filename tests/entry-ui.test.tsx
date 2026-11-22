@@ -22,7 +22,9 @@ function render(flow: State['flow'], extra: Partial<State> = {}) {
 
 test('entry screen offers real discovery and demo as separate actions', () => {
   const html = render('START', { discoveryReady: true });
-  expect(html).toContain('어떻게 시작할까요?');
+  const heading = html.match(/<h1\b[^>]*>어떻게 시작할까요\?<\/h1>/)?.[0];
+  expect(heading).toBeDefined();
+  expect(heading).not.toMatch(/\s(?:role|tabindex)=/i);
   expect(html).toContain('aria-label="실제 매장 찾기"');
   expect(html).toContain('aria-label="데모 매장으로 진행하기"');
 });
