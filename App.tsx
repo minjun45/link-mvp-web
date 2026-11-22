@@ -7,6 +7,7 @@ import {
   View,
 } from 'react-native';
 import { useApp } from './src/services/useApp';
+import { DEMO_DISCOVERY_MS } from './src/services/discovery';
 import {
   Button,
   Card,
@@ -75,7 +76,7 @@ export default function App() {
   };
   const { alert, helpCard, dialog } = useAppDialog(theme);
   const entryScreen = ['START', 'BLE_GUIDE', 'V5-01', 'V5-01e', 'V5-02', 'V5-02e', 'V5-02s', 'V5-03', 'V5-04'].includes(s.flow);
-  const heading = useRef<React.ComponentRef<typeof Text>>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const [hasMore, setHasMore] = useState(false);
@@ -86,7 +87,7 @@ export default function App() {
     if (!viewport || !surface) return;
     const measure = () => {
       setHasMore(viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight > 2);
-      const rect = (heading.current as unknown as HTMLElement | null)?.getBoundingClientRect();
+      const rect = heading.current?.getBoundingClientRect();
       setTitleScrolled(!!rect && rect.bottom <= viewport.getBoundingClientRect().top);
     };
     measure();
@@ -107,7 +108,9 @@ export default function App() {
     s.step
   ];
   const title =
-    s.flow === 'V5-M3'
+    s.flow === 'V5-11' && s.order?.status === 'ready'
+      ? titles['V5-12']
+      : s.flow === 'V5-M3'
       ? `${wizardGroup?.name || '옵션'}을 골라 주세요`
       : s.flow === 'V5-02'
       ? `매장 ${s.found.length}곳을 찾았어요`
@@ -152,13 +155,9 @@ export default function App() {
     : nav('BLE_GUIDE');
   const add = () => d({ type: 'ADD', id: key() });
   useEffect(() => {
-    // The browser owns focus while its Bluetooth device chooser is open.
     if ((s.flow === 'V5-01' && s.discovery === 'ble') || s.flow === 'V5-05c') return;
 
     scroll.current?.scrollTo({ top: 0 });
-    const titleNode = heading.current as unknown as HTMLElement | null;
-    titleNode?.setAttribute('tabindex', '-1');
-    titleNode?.focus({ preventScroll: true });
   }, [s.flow, s.revision]);
   useEffect(() => {
     if (s.error === 'CHANGE_STORE')
@@ -493,15 +492,15 @@ export default function App() {
       ];
       break;
     case 'V5-01':
+      if (s.discovery === 'demo')
+        searchStatus = `데모에서는 ${DEMO_DISCOVERY_MS / 1000}초 후 매장 검색 결과가 자동으로 표시돼요.`;
       body = (
         <>
-          {subtitle(s.discovery === 'demo'
-            ? '매장 입구 근처에서 잠시 기다려 주세요. 찾으면 진동으로 알려드려요.'
-            : '브라우저 창에서 매장 기기를 선택해 주세요.')}
+          {subtitle(searchStatus || '브라우저 창에서 매장 기기를 선택해 주세요.')}
           <Card compact>
             <InfoRow
               icon="store"
-              label="블루투스"
+              label={s.discovery === 'demo' ? '매장 검색' : '블루투스'}
               value={s.discovery === 'demo'
                 ? '데모 매장 확인 중'
                 : '주변 기기 확인 중'}
@@ -579,9 +578,7 @@ export default function App() {
         searchStatus = list.length ? `매장 검색 결과 ${list.length}곳` : '일치하는 매장이 없어요.';
       body = (
         <>
-          {nearby && s.found[0] && subtitle(s.discovery === 'demo'
-            ? '데모 매장을 선택해 주세요.'
-            : `${s.found[0].name}을 찾았어요.`)}
+          {nearby && !s.query.trim() && subtitle(s.message || '매장을 선택해 주세요.')}
           {search('매장 이름으로 찾기')}
           {sectionLabel(nearby && !s.query
             ? `찾은 매장 · ${list.length}곳`
@@ -621,14 +618,16 @@ export default function App() {
       body = store ? (
           <Card compact>
             <InfoRow icon="store" label="매장" value={store.name} />
-            <InfoRow icon="pin" label="주소" value={store.address} />
-            <InfoRow icon="clock" label="영업" value={store.hours} />
+            <InfoRow heading icon="pin" label="주소" value={store.address} />
+            <InfoRow heading icon="clock" label="영업" value={store.hours} />
             <InfoRow
+              heading
               icon="card"
               label="주문"
               value={store.open ? '지금 휴대폰 주문 가능' : '오늘 주문 마감'}
             />
             <InfoRow
+              heading
               icon="clock"
               label="대기"
               value={store.wait ? `앞 주문 ${store.wait.ordersAhead}건 · 약 ${store.wait.minutes}분` : '매장에서 확인해 주세요'}
@@ -709,15 +708,6 @@ export default function App() {
     }
     case 'V5-M1':
     case 'V5-05': {
-      primary = {
-        label: s.cart.length
-          ? `장바구니 보기 · ${cartQuote?.quantity || s.cart.length}개 · ${money(
-              cartQuote?.total || 0,
-            )}`
-          : '장바구니 비어 있음',
-        disabled: !s.cart.length,
-        run: () => nav('V5-08'),
-      };
       if (s.flow === 'V5-M1' && !s.query.trim()) {
         body = (
           <>
@@ -857,7 +847,6 @@ export default function App() {
                       description={p.soldOut ? '오늘 준비 수량 소진' : p.description}
                       price={p.soldOut ? undefined : money(p.price)}
                       tag={p.soldOut ? '품절' : undefined}
-                      label={p.soldOut ? `${p.name}, 품절, 오늘 준비 수량 소진` : undefined}
                       disabled={p.soldOut}
                       onPress={() => d({ type: 'SELECT_PRODUCT', id: p.id })}
                     />
@@ -1249,7 +1238,9 @@ export default function App() {
         run: () => d({ type: 'OPEN_ORDER' }),
       };
       break;
-    case 'V5-11':
+    case 'V5-11': {
+      const ready = s.order?.status === 'ready';
+      const currentStep = ready ? 3 : s.order?.status === 'received' ? 1 : 2;
       body = s.order && (
         <>
           {subtitle(`${s.order.snapshot.storeName} · 주문번호`)}
@@ -1265,8 +1256,8 @@ export default function App() {
           <Card compact>
             {['주문 전달', '접수 완료', '준비 중', '픽업 가능'].map(
               (label, i) => {
-                const active = i === (s.order?.status === 'received' ? 1 : 2);
-                const done = i < (s.order?.status === 'received' ? 1 : 2);
+                const active = i === currentStep;
+                const done = i < currentStep;
                 const phase = done ? '완료' : active ? '지금' : '대기';
                 return (
                   <View
@@ -1337,13 +1328,14 @@ export default function App() {
           {s.order.demo && <T kind="small">데모 주문의 준비 상태예요.</T>}
         </>
       );
-      primary = {
+      if (ready) primary = { label: '픽업 정보 보기', run: () => d({ type: 'OPEN_ORDER' }) };
+      secondary = [{
         label: '주문 상태 다시 듣기',
-        neutral: true,
         run: () =>
           app.speak(`${title}. 주문번호 ${s.order?.number || ''}.`),
-      };
+      }];
       break;
+    }
     case 'V5-12':
       body = s.order && (
         <>
@@ -1406,13 +1398,13 @@ export default function App() {
       break;
   }
   const shortTitle = s.flow === 'V5-05' || s.flow === 'V5-06' ? title
-    : s.flow === 'V5-08' ? '장바구니' : s.flow === 'V5-11' ? '주문 준비 중'
+    : s.flow === 'V5-08' ? '장바구니' : s.flow === 'V5-11' ? '주문 현황'
     : topLabels[s.flow]?.replace(/^\d \/ \d\s*/, '') || title;
   const cartScreen = ['V5-05', 'V5-M1'].includes(s.flow);
-  const pinSecondary =
+  const pinSecondary = s.flow === 'V5-11' || (
     height >= 650 &&
     fontScale * theme.scale < 1.5 &&
-    ['START', 'BLE_GUIDE', 'V5-O1', 'V5-O4', 'V5-01e', 'V5-03', 'V5-R1', 'V5-06s', 'V5-12', 'P02-C', 'P02-F'].includes(s.flow);
+    ['START', 'BLE_GUIDE', 'V5-O1', 'V5-O4', 'V5-01e', 'V5-03', 'V5-R1', 'V5-06s', 'V5-12', 'P02-C', 'P02-F'].includes(s.flow));
   const hero =
     s.flow === 'START'
       ? 'store'
@@ -1429,13 +1421,14 @@ export default function App() {
     s.flow === 'P02-V' || s.flow === 'V5-05c' ? '' : s.message;
   return (
     <ThemeContext.Provider value={theme}>
-      <div className={`app-frame${entryScreen ? ' entry-frame' : ''}`} data-flow={s.flow} style={{ backgroundColor: theme.bg, color: theme.text, '--page': theme.bg, '--card': theme.card, '--divider': s.settings.dark ? theme.line : '#DCDDE2', '--muted': theme.muted, '--line': theme.line, '--scale': theme.scale } as React.CSSProperties}>
-        <div className="visually-hidden" role="alert">
-          {s.error !== 'CHANGE_STORE' ? s.error : ''}
-        </div>
-        <div className="visually-hidden" role="status">
-          {searchStatus || screenMessage}
-        </div>
+      <div className="visually-hidden" role="alert">
+        {s.error !== 'CHANGE_STORE' ? s.error : ''}
+      </div>
+      <div className="visually-hidden" role="status">
+        {searchStatus || screenMessage}
+      </div>
+      {/* A fresh screen lets Tab start at the top without moving focus to the heading. */}
+      <div key={`${s.flow}:${s.revision}`} className={`app-frame${entryScreen ? ' entry-frame' : ''}`} data-flow={s.flow} style={{ backgroundColor: theme.bg, color: theme.text, '--page': theme.bg, '--card': theme.card, '--divider': s.settings.dark ? theme.line : '#DCDDE2', '--muted': theme.muted, '--line': theme.line, '--scale': theme.scale } as React.CSSProperties}>
         <View style={[st.header, { borderBottomWidth: 1.5, borderColor: titleScrolled ? (s.settings.dark ? theme.line : '#E1E2E6') : 'transparent' }]}>
           {!['BOOT', 'START', 'V5-O1'].includes(s.flow) && (
             <button
@@ -1471,21 +1464,9 @@ export default function App() {
                 />
               )}
               {productHeading && <Photo large />}
-              <Text
-                ref={heading}
-                accessibilityRole="header"
-                accessible
-                style={{
-                  fontSize: 26 * theme.scale,
-                  lineHeight: 36.4 * theme.scale,
-                  includeFontPadding: false,
-                  fontFamily,
-                  fontWeight: '700',
-                  color: theme.text,
-                }}
-              >
+              <h1 ref={heading} className="section-heading" style={{ fontSize: 26 * theme.scale }}>
                 {title}
-              </Text>
+              </h1>
               {!!s.error &&
                 s.error !== 'CHANGE_STORE' &&
                 !['E01', 'E02', 'E04', 'E05'].includes(s.flow) && (
@@ -1500,7 +1481,7 @@ export default function App() {
               {body}
               {/* On the menu, filter messages ("음료 메뉴 2개") are announced by the
                   status region; repeating them under the list read as an extra item. */}
-              {!!screenMessage && s.flow !== 'V5-05' && <T>{screenMessage}</T>}
+              {!!screenMessage && s.flow !== 'V5-05' && s.flow !== 'V5-02' && <T>{screenMessage}</T>}
               {!pinSecondary &&
                 secondary.map((b, i) => (
                   <Button
@@ -1514,32 +1495,24 @@ export default function App() {
           </div>
           {hasMore && <div aria-hidden="true" className="more-hint"><span>아래에 더 있어요</span></div>}
         </div>
-        {(primary || (pinSecondary && secondary.length > 0) || s.settings.staffHelp) && <div className="fixed-footer" data-testid="fixed-footer">
-          {primary &&
-            (cartScreen ? (
-              <CartBar
-                testID="primary-action"
-                label={primary.label}
-                quantity={s.cart.reduce((n, line) => n + line.quantity, 0)}
-                total={
-                  cartQuote
-                    ? money(cartQuote.total)
-                    : s.cart.length
-                    ? '금액 확인 필요'
-                    : '0원'
-                }
-                onPress={primary.run}
-                disabled={!!primary.disabled}
-              />
-            ) : (
-              <Button
-                testID="primary-action"
-                primary={!primary.neutral}
-                label={primary.label}
-                onPress={primary.run}
-                disabled={primary.disabled}
-              />
-            ))}
+        {(cartScreen || primary || (pinSecondary && secondary.length > 0) || s.settings.staffHelp) && <div className="fixed-footer" data-testid="fixed-footer">
+          {cartScreen ? (
+            <CartBar
+              testID="primary-action"
+              quantity={s.cart.reduce((n, line) => n + line.quantity, 0)}
+              total={cartQuote ? money(cartQuote.total) : s.cart.length ? '금액 확인 필요' : '0원'}
+              onPress={() => nav('V5-08')}
+              disabled={!s.cart.length}
+            />
+          ) : primary && (
+            <Button
+              testID="primary-action"
+              primary={!primary.neutral}
+              label={primary.label}
+              onPress={primary.run}
+              disabled={primary.disabled}
+            />
+          )}
           {pinSecondary &&
             secondary.map(b => (
               <Button
@@ -1556,8 +1529,8 @@ export default function App() {
             onPress={help}
           />}
         </div>}
-        {dialog}
       </div>
+      {dialog}
     </ThemeContext.Provider>
   );
 }

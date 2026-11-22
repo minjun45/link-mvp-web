@@ -90,19 +90,26 @@ export function InfoRow({
   icon,
   label,
   value,
+  heading = false,
 }: {
   icon: IconName;
   label: string;
   value: string;
+  heading?: boolean;
 }) {
   const theme = useContext(ThemeContext);
+  const labelStyle = { fontSize: 15 * theme.scale, lineHeight: 21 * theme.scale, fontWeight: '500' } as const;
   return (
     <View
       style={styles.infoRow}
     >
       <Icon name={icon} color={theme.text} />
       <View style={styles.copy}>
-        <T kind="small" style={{ fontSize: 15 * theme.scale, lineHeight: 21 * theme.scale, fontWeight: '500' }}>{label}</T>
+        {heading ? (
+          <h2 style={{ ...labelStyle, lineHeight: `${labelStyle.lineHeight}px`, margin: 0, color: theme.muted }}>{label}</h2>
+        ) : (
+          <T kind="small" style={labelStyle}>{label}</T>
+        )}
         <T
           style={{
             fontSize: 20 * theme.scale,
@@ -124,7 +131,6 @@ export function NavigationRow({
   icon,
   photo,
   tag,
-  label,
   onPress,
   disabled,
 }: {
@@ -134,8 +140,6 @@ export function NavigationRow({
   icon?: IconName;
   photo?: boolean;
   tag?: string;
-  /** Screen-reader name when the joined visible text is not the best reading. */
-  label?: string;
   onPress: () => void;
   disabled?: boolean;
 }) {
@@ -144,9 +148,6 @@ export function NavigationRow({
     <button
       type="button"
       className={photo ? 'app-button nav-button menu-button' : 'app-button nav-button'}
-      aria-label={
-        label || [title, description, price, tag].filter(Boolean).join(', ')
-      }
       disabled={disabled}
       onClick={onPress}
       style={{
@@ -353,14 +354,12 @@ export function Stepper({
 }
 
 export function CartBar({
-  label,
   quantity,
   total,
   onPress,
   testID,
   disabled,
 }: {
-  label: string;
   quantity: number;
   total: string;
   onPress: () => void;
@@ -372,7 +371,6 @@ export function CartBar({
       type="button"
       className="app-button cart-button"
       data-testid={testID}
-      aria-label={label}
       disabled={disabled}
       onClick={onPress}
     >

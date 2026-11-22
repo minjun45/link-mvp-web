@@ -341,16 +341,24 @@ export function reduce(s: State, a: Action): State {
             : s,
           a.demo,
         );
-      case 'FOUND':
+      case 'FOUND': {
+        const kind = s.discovery === 'demo' ? '데모 매장' : '매장';
+        let result = `${kind}을 찾지 못했어요.`;
+        if (a.stores.length === 1)
+          result = `${kind} 1곳을 찾았어요. ${a.stores[0].name}의 정보를 확인해 주세요.`;
+        else if (a.stores.length > 1)
+          result = `${kind} ${a.stores.length}곳을 찾았어요. 매장을 선택해 주세요.`;
         return {
           ...goto(
             s,
             a.stores.length === 1 ? 'V5-03' : a.stores.length ? 'V5-02' : 'V5-01e',
           ),
           found: a.stores,
+          message: result,
           selectedStoreId: a.stores.length === 1 ? a.stores[0].id : undefined,
           signal: a.stores.length ? 'found' : undefined,
         };
+      }
       case 'FAIL':
         return {
           ...(s.flow === a.flow ? s : goto(s, a.flow)),
@@ -630,12 +638,10 @@ export function reduce(s: State, a: Action): State {
         return {
           ...s,
           order: a.order,
-          flow:
-            s.flow === 'V5-11' && a.order.status === 'ready' ? 'V5-12' : s.flow,
           message:
             a.order.status !== s.order?.status
               ? a.order.status === 'ready'
-                ? '음료가 준비됐어요.'
+                ? s.flow === 'V5-11' ? '음료가 준비됐어요. 픽업 정보를 확인해 주세요.' : '음료가 준비됐어요.'
                 : '주문을 준비하고 있어요.'
               : s.message,
           signal: a.order.status !== s.order?.status ? 'found' : s.signal,
