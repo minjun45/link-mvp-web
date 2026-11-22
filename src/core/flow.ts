@@ -9,7 +9,7 @@ import type {
   Settings,
   Flow,
 } from './types';
-import { defaults, initialOptions, quote, fromOrder } from './domain';
+import { defaults, initialOptions, quote, fromOrder, unit } from './domain';
 export const settings: Settings = {
   dark: false,
   contrast: false,
@@ -43,6 +43,7 @@ export const initial: State = {
   discoveryReady: false,
   error: '',
   message: '',
+  notice: '',
   revision: 0,
 };
 export type Action =
@@ -101,6 +102,9 @@ const selectionFlow = (s: State, p: Product, editing: boolean): Flow =>
     : s.settings.quickOptions
     ? 'V5-06s'
     : 'V5-06';
+// "2잔을" / "2개를": the unit plus the object particle that fits it.
+const counted = (products: Product[], productId: string) =>
+  unit(products, [productId]) === '잔' ? '잔을' : '개를';
 const missing = (s: State) =>
   s.products
     .find(p => p.id === s.productId)
@@ -111,6 +115,7 @@ const goto = (s: State, flow: Flow): State => ({
   ...(['START', 'V5-01'].includes(flow) ? { discoveryReady: false } : {}),
   error: '',
   message: '',
+  notice: '',
   signal: undefined,
   missingGroup: undefined,
   revision: s.revision + 1,
@@ -386,6 +391,9 @@ export function reduce(s: State, a: Action): State {
         return {
           ...s,
           query: a.value,
+          // A message about the previous list (e.g. a sold-out item) no
+          // longer applies to the new results.
+          error: '',
           storeLimit: 3,
           menuLimit: 5,
           flow: s.flow === 'V5-05c' ? 'V5-05' : s.flow,
@@ -398,14 +406,19 @@ export function reduce(s: State, a: Action): State {
           category: a.value,
           menuLimit: 5,
           query: '',
-          message: `${a.value} 메뉴 ${
-            s.products.filter(p => p.category === a.value).length
-          }개`,
+          // From the category screen this opens a new screen, whose title is
+          // read on focus; a status message at the same time would cut it off.
+          message:
+            s.flow === 'V5-M1'
+              ? ''
+              : `${a.value} 메뉴 ${
+                  s.products.filter(p => p.category === a.value).length
+                }개`,
         };
       case 'MORE_STORES':
         return { ...s, storeLimit: s.storeLimit + 3 };
       case 'MORE_MENU':
-        return { ...s, menuLimit: s.menuLimit + 5 };
+        return { ...s, menuLimit: s.menuLimit + 5, error: '' };
       case 'MORE_CATEGORIES':
         return { ...s, categoryLimit: s.categoryLimit + 6 };
       case 'SELECT_PRODUCT': {
@@ -451,8 +464,14 @@ export function reduce(s: State, a: Action): State {
           error: '',
           missingGroup: undefined,
         };
-      case 'QUANTITY':
-        return { ...s, quantity: Math.min(20, Math.max(1, a.value)) };
+      case 'QUANTITY': {
+        const quantity = Math.min(20, Math.max(1, a.value));
+        return {
+          ...s,
+          quantity,
+          notice: `${quantity}${unit(s.products, s.productId ? [s.productId] : [])}`,
+        };
+      }
       case 'EDIT_OPTIONS':
         return visit(s, s.editId ? 'V5-08e' : 'V5-06');
       case 'STEP_NEXT': {
@@ -506,7 +525,9 @@ export function reduce(s: State, a: Action): State {
           cart,
           message: `${s.products.find(p => p.id === line.productId)!.name} ${
             line.quantity
-          }개를 ${s.editId ? '변경했어요.' : '담았어요.'}`,
+          }${counted(s.products, line.productId)} ${
+            s.editId ? '변경했어요.' : '담았어요.'
+          }`,
           signal: 'selected',
         };
       }
@@ -515,19 +536,28 @@ export function reduce(s: State, a: Action): State {
           ...s,
           cart: s.cart.filter(x => x.id !== a.id),
           message: '메뉴를 삭제했어요.',
+          notice: '',
         };
-      case 'CART_QUANTITY':
+      case 'CART_QUANTITY': {
+        const cart = s.cart.map(x =>
+          x.id === a.id
+            ? {
+                ...x,
+                quantity: Math.max(1, Math.min(20, x.quantity + a.delta)),
+              }
+            : x,
+        );
+        const line = cart.find(x => x.id === a.id);
+        const product = s.products.find(p => p.id === line?.productId);
         return {
           ...s,
-          cart: s.cart.map(x =>
-            x.id === a.id
-              ? {
-                  ...x,
-                  quantity: Math.max(1, Math.min(20, x.quantity + a.delta)),
-                }
-              : x,
-          ),
+          cart,
+          notice:
+            line && product
+              ? `${product.name} ${line.quantity}${unit(s.products, [product.id])}`
+              : s.notice,
         };
+      }
       case 'RETRY_CHECKOUT':
       case 'CHECKOUT': {
         if (a.type === 'RETRY_CHECKOUT') {
@@ -626,20 +656,25 @@ export function reduce(s: State, a: Action): State {
       case 'PICKUP_COMPLETE':
         if (s.flow !== 'V5-12') return s;
         return start({ ...s, order: undefined });
-      case 'ORDER_UPDATED':
+      case 'ORDER_UPDATED': {
+        const changed = a.order.status !== s.order?.status;
+        const pickup = s.flow === 'V5-11' && a.order.status === 'ready';
         return {
           ...s,
           order: a.order,
-          flow:
-            s.flow === 'V5-11' && a.order.status === 'ready' ? 'V5-12' : s.flow,
-          message:
-            a.order.status !== s.order?.status
-              ? a.order.status === 'ready'
-                ? '음료가 준비됐어요.'
-                : '주문을 준비하고 있어요.'
-              : s.message,
-          signal: a.order.status !== s.order?.status ? 'found' : s.signal,
+          flow: pickup ? 'V5-12' : s.flow,
+          // Moving to V5-12 focuses its title "음료가 준비됐어요". A status
+          // message at the same moment would say it twice or cut it off.
+          message: pickup
+            ? ''
+            : changed
+            ? a.order.status === 'ready'
+              ? '음료가 준비됐어요.'
+              : '주문을 준비하고 있어요.'
+            : s.message,
+          signal: changed ? 'found' : s.signal,
         };
+      }
       case 'SETTINGS': {
         const connection =
           (a.value.mode && a.value.mode !== s.settings.mode) ||

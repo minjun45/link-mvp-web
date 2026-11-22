@@ -12,6 +12,7 @@ export function useApp() {
   const live = useRef(s);
   live.current = s;
   const [busy, setBusy] = useState(false);
+  const [listening, setListening] = useState(false);
   const completing = useRef(false);
   const discovery = useRef<{ revision: number; stop: () => void } | undefined>(undefined);
   useEffect(() => {
@@ -222,12 +223,30 @@ export function useApp() {
     });
     discovery.current = { revision: next.revision, stop };
   }
+  /** Resolves true when the recognized words were put in the search field. */
   async function voiceSearch() {
+    if (listening) return false;
+    // Clear an earlier message so the same one is announced again.
+    dispatch({ type: 'CLEAR_ERROR' });
+    setListening(true);
+    Device.signal('listen');
     try {
-      const text = await Device.recognize();
-      if (text) dispatch({ type: 'QUERY', value: text });
+      const text = (await Device.recognize()).trim();
+      if (text) {
+        dispatch({ type: 'QUERY', value: text });
+        return true;
+      }
+      dispatch({
+        type: 'FAIL',
+        flow: live.current.flow,
+        message: '말씀을 듣지 못했어요. 말하기를 다시 눌러 주세요.',
+      });
+      return false;
     } catch (e) {
       dispatch({ type: 'FAIL', flow: live.current.flow, message: message(e) });
+      return false;
+    } finally {
+      setListening(false);
     }
   }
   async function complete(result: 'success' | 'cancel' | 'fail' | 'timeout') {
@@ -257,6 +276,7 @@ export function useApp() {
     s,
     dispatch,
     busy,
+    listening,
     speak,
     discover,
     voiceSearch,

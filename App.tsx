@@ -2,7 +2,6 @@ import React, { useContext, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
-  Text,
   TextInput,
   useWindowDimensions,
   View,
@@ -28,8 +27,8 @@ import {
   Photo,
   Stepper,
 } from './src/ui/figma';
-import type { Group, PricedLine, Quote, Settings } from './src/core/types';
-import { frequent, fromOrder, key, money, quote } from './src/core/domain';
+import type { Group, PricedLine, Product, Quote, Settings } from './src/core/types';
+import { frequent, fromOrder, key, money, quote, unit, unitFor } from './src/core/domain';
 import * as Device from './src/native/browserDevice';
 import { useAppDialog } from './src/ui/dialog';
 import { staffHelpText } from './src/ui/staffHelp';
@@ -43,15 +42,16 @@ type ActionButton = {
 function menuSearchKey(text: string) {
   return text.replace(/\s+/g, '').replace(/라떼/g, '라테');
 }
-
-function unitFor(category?: string) {
-  return category === '커피' || category === '음료' ? '잔' : '개';
+// 을 after a final consonant ("옵션을"), 를 after a vowel ("온도를", "크기를").
+function objectParticle(word: string) {
+  const code = word.charCodeAt(word.length - 1) - 0xac00;
+  return code >= 0 && code < 11172 && code % 28 !== 0 ? '을' : '를';
 }
 
 export default function App() {
   const app = useApp();
   const { s, dispatch: d } = app;
-  const { height, fontScale } = useWindowDimensions();
+  const { width, height, fontScale } = useWindowDimensions();
   const theme = {
     ...light,
     ...(s.settings.dark
@@ -73,22 +73,49 @@ export default function App() {
       : {}),
     scale: s.settings.large ? 1 : 0.9,
     contrast: s.settings.contrast,
+    // About 300px of layout width per 100% text size: phones at 150%+ zoom,
+    // or a small phone with 큰 글씨. Text squeezed between icons there broke
+    // after every letter or two.
+    compact: width < (s.settings.large ? 333 : 300) * fontScale,
   };
   const { alert, helpCard, dialog } = useAppDialog(theme);
   const entryScreen = ['START', 'BLE_GUIDE', 'V5-01', 'V5-01e', 'V5-02', 'V5-02e', 'V5-02s', 'V5-03', 'V5-04'].includes(s.flow);
-  const heading = useRef<React.ComponentRef<typeof Text>>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  // The screen (flow:revision) whose title last received focus.
+  const titleScreen = useRef('');
+  const alertScreen = useRef('');
+  const [alertText, setAlertText] = useState('');
   const scroll = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const [hasMore, setHasMore] = useState(false);
   const [titleScrolled, setTitleScrolled] = useState(false);
+  // The menu group at the top of the list, highlighted in the category bar.
+  const [currentGroup, setCurrentGroup] = useState(0);
+  // The group the user jumped to, kept highlighted until they scroll away
+  // (the last group may not reach the top of a tall screen).
+  const jumped = useRef<{ index: number; top: number } | null>(null);
   useEffect(() => {
     const viewport = scroll.current;
     const surface = content.current;
     if (!viewport || !surface) return;
     const measure = () => {
       setHasMore(viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight > 2);
-      const rect = (heading.current as unknown as HTMLElement | null)?.getBoundingClientRect();
+      const rect = heading.current?.getBoundingClientRect();
       setTitleScrolled(!!rect && rect.bottom <= viewport.getBoundingClientRect().top);
+      const tabs = surface.querySelector('.category-tabs');
+      const groups = [...surface.querySelectorAll<HTMLElement>('[data-group]')];
+      if (!tabs || !groups.length) return;
+      if (jumped.current && Math.abs(viewport.scrollTop - jumped.current.top) < 2) {
+        setCurrentGroup(jumped.current.index);
+        return;
+      }
+      jumped.current = null;
+      const line = tabs.getBoundingClientRect().bottom + 8;
+      const atTop = groups.filter(g => g.getBoundingClientRect().top <= line);
+      // At the very end the last group may never reach the top: mark it then.
+      const atEnd = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 2;
+      const current = atEnd ? groups[groups.length - 1] : atTop.pop() || groups[0];
+      setCurrentGroup(Number(current.dataset.group));
     };
     measure();
     const observer = new ResizeObserver(measure);
@@ -107,9 +134,13 @@ export default function App() {
   const wizardGroup = s.products.find(p => p.id === s.productId)?.options[
     s.step
   ];
+  const cartCount = s.cart.reduce((n, l) => n + l.quantity, 0);
+  const cartUnit = unit(s.products, s.cart.map(l => l.productId));
+  const product = s.products.find(x => x.id === s.productId);
+  const groupName = wizardGroup?.name || '옵션';
   const title =
     s.flow === 'V5-M3'
-      ? `${wizardGroup?.name || '옵션'}을 골라 주세요`
+      ? `${groupName}${objectParticle(groupName)} 골라 주세요`
       : s.flow === 'V5-02'
       ? `매장 ${s.found.length}곳을 찾았어요`
       : s.flow === 'V5-05' && store
@@ -118,7 +149,6 @@ export default function App() {
       ? s.products.find(p => p.id === s.productId)?.name || titles[s.flow]
       : s.flow === 'V5-08' ? '장바구니'
       : titles[s.flow];
-  const product = s.products.find(x => x.id === s.productId);
   const selectedTotal = product
     ? (product.price +
         product.options.reduce(
@@ -152,15 +182,90 @@ export default function App() {
     ? app.discover(true)
     : nav('BLE_GUIDE');
   const add = () => d({ type: 'ADD', id: key() });
+  // Moves focus to something that is not normally focusable (a heading, a
+  // line of text), so a screen reader reads it next. Focusable only while it
+  // holds focus, so it never stays behind as an extra stop.
+  const focusOnce = (el: HTMLElement | null | undefined, preventScroll = false) => {
+    if (!el) return;
+    el.tabIndex = -1;
+    el.addEventListener('blur', () => el.removeAttribute('tabindex'), { once: true });
+    el.focus({ preventScroll });
+  };
+  // The category bar of a grouped menu jumps to a group, every time it is
+  // pressed. Focus goes to the group's heading, so a screen reader continues
+  // reading from there instead of from the bar.
+  const jumpToGroup = (index: number) => {
+    const section = document.querySelector<HTMLElement>(`[data-group="${index}"]`);
+    if (!section) return;
+    section.scrollIntoView({ block: 'start' });
+    jumped.current = { index, top: scroll.current?.scrollTop ?? 0 };
+    setCurrentGroup(index);
+    focusOnce(section.querySelector('h2'), true);
+  };
+  // After a search (the keyboard's 검색 key, or voice search), close the
+  // keyboard and move to the results heading ("검색 결과 · 2개") or the "no
+  // results" line. A status message here was held back while typing and then
+  // cut off when VoiceOver read the search field again.
+  // With the keyboard open, wait until it has finished closing: on iPhone,
+  // VoiceOver goes back to the search field at that moment, which undid a
+  // move made earlier. The visible area stops resizing once it is closed.
+  const showResults = (keyboard: boolean) => {
+    (document.activeElement as HTMLElement | null)?.blur();
+    const viewport = window.visualViewport;
+    let timer = 0;
+    const go = () => {
+      viewport?.removeEventListener('resize', settle);
+      focusOnce(document.getElementById('search-results'));
+    };
+    const settle = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(go, 200);
+    };
+    if (!keyboard) {
+      timer = window.setTimeout(go, 100);
+      return;
+    }
+    viewport?.addEventListener('resize', settle);
+    timer = window.setTimeout(go, 800); // no resize seen (keyboard already closed)
+  };
+  // Screens shown only while waiting for a result. A screen reader hears their
+  // title through the status region instead of being moved there, because the
+  // result screen replaces them a moment later and takes focus itself.
+  const waiting = ['BOOT', 'V5-01', 'V5-04', 'V5-09'].includes(s.flow);
+  // Every new screen focuses its title, so it is read first ("화면이 바뀌면
+  // 제목부터 읽힘"). That includes automatic moves such as order ready (V5-12)
+  // and payment results, but not in-place updates or waiting screens.
   useEffect(() => {
-    // The browser owns focus while its Bluetooth device chooser is open.
+    // The browser owns focus while its Bluetooth device chooser is open, and
+    // the added-item sheet (V5-05c) moves focus to its own title.
     if ((s.flow === 'V5-01' && s.discovery === 'ble') || s.flow === 'V5-05c') return;
 
     scroll.current?.scrollTo({ top: 0 });
-    const titleNode = heading.current as unknown as HTMLElement | null;
-    titleNode?.setAttribute('tabindex', '-1');
-    titleNode?.focus({ preventScroll: true });
+    if (waiting) return;
+    titleScreen.current = `${s.flow}:${s.revision}`;
+    // Wait for the press to finish: the footer button that was just pressed
+    // can stay in place with a new label, and a screen reader would keep its
+    // cursor there.
+    const timer = window.setTimeout(() => {
+      const title = heading.current;
+      if (!title) return;
+      const active = document.activeElement as HTMLElement | null;
+      if (active && active !== title) active.blur();
+      focusOnce(title, true);
+    }, 80);
+    return () => window.clearTimeout(timer);
   }, [s.flow, s.revision]);
+  // Errors go to the alert region only when they appear on the current
+  // screen. An error that comes with a new screen is shown under its title:
+  // announcing it while focus moves to that title cuts one of them off.
+  // Runs after the focus effect above, which records titleScreen.
+  useEffect(() => {
+    const screen = `${s.flow}:${s.revision}`;
+    const newScreen = alertScreen.current !== screen;
+    alertScreen.current = screen;
+    const error = s.error === 'CHANGE_STORE' ? '' : s.error;
+    setAlertText(newScreen && titleScreen.current === screen ? '' : error);
+  }, [s.error, s.flow, s.revision]);
   useEffect(() => {
     if (s.error === 'CHANGE_STORE')
       alert(
@@ -192,30 +297,15 @@ export default function App() {
       ]}
     >
       <Icon name="search" size={26} color={theme.text} />
-      {/* The hint is drawn as hidden text, not a native placeholder, so
-          screen readers announce the field name once instead of twice. */}
       <View style={{ flex: 1, minWidth: 0, justifyContent: 'center' }}>
-        {!s.query && (
-          <Text
-            aria-hidden
-            pointerEvents="none"
-            numberOfLines={1}
-            style={{
-              position: 'absolute',
-              left: 0,
-              right: 0,
-              color: theme.muted,
-              fontFamily,
-              fontSize: 19 * theme.scale,
-            }}
-          >
-            {placeholder}
-          </Text>
-        )}
+        {/* The name says what the field is for; the native placeholder gives
+            an example, which screen readers read as the field's hint. */}
         <TextInput
           value={s.query}
           onChangeText={value => d({ type: 'QUERY', value })}
           accessibilityLabel={label}
+          placeholder={placeholder}
+          placeholderTextColor={theme.muted}
           style={{
             minWidth: 0,
             color: theme.text,
@@ -225,12 +315,15 @@ export default function App() {
             minHeight: 48,
           }}
           returnKeyType="search"
+          onSubmitEditing={() => s.query.trim() && showResults(true)}
         />
       </View>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="말하기"
-        onPress={app.voiceSearch}
+        accessibilityLabel={app.listening ? '듣는 중' : '말하기'}
+        onPress={async () => {
+          if (await app.voiceSearch()) showResults(false);
+        }}
         style={({ pressed }) => ({
           minHeight: 48,
           flexDirection: 'row',
@@ -250,7 +343,7 @@ export default function App() {
             fontWeight: '700',
           }}
         >
-          말하기
+          {app.listening ? '듣는 중' : '말하기'}
         </T>
       </Pressable>
     </View>
@@ -266,24 +359,28 @@ export default function App() {
       {text}
     </T>
   );
-  const sectionLabel = (text: string) => (
-    <h2 className="section-heading" style={{ fontSize: 20 * theme.scale }}>{text}</h2>
+  // Section titles inside a screen are <h2>, under the screen's <h1>, so
+  // screen reader users can jump between sections ("자주 시킨 메뉴", "수량" …).
+  const sectionLabel = (text: string, id?: string) => (
+    <h2 id={id} className="section-heading" style={{ fontSize: 20 * theme.scale }}>{text}</h2>
   );
   const options = (groups: Group[]) => (
     <View style={st.stack}>
       {groups.map(g => (
-        <View
-          key={g.id}
-          style={st.stack}
-          accessibilityRole="radiogroup"
-          accessibilityLabel={`${g.name} · ${g.required ? '필수' : '선택'}`}
-        >
+        <View key={g.id} style={st.stack}>
           {sectionLabel(
             `${g.name} · ${g.required ? '필수' : '선택'}`,
+            `group-${g.id}`,
           )}
           {s.missingGroup === g.id && (
             <T style={{ color: theme.danger }}>먼저 선택해 주세요.</T>
           )}
+          {/* Named by the heading above, so the name is not written twice. */}
+          <View
+            style={st.stack}
+            accessibilityRole="radiogroup"
+            aria-labelledby={`group-${g.id}`}
+          >
           {g.choices.map(c => {
             const temperature =
               g.id === 'temperature' && (c.id === 'ice' || c.id === 'hot');
@@ -298,17 +395,18 @@ export default function App() {
               />
             );
           })}
+          </View>
         </View>
       ))}
     </View>
   );
-  const unit = unitFor(product?.category);
+  const productUnit = unitFor(product?.category);
   const quantity = (
     <View style={st.stack}>
       {sectionLabel('수량')}
       <Stepper
         quantity={s.quantity}
-        unit={unit}
+        unit={productUnit}
         onChange={value => d({ type: 'QUANTITY', value })}
       />
     </View>
@@ -326,7 +424,8 @@ export default function App() {
   const selectionSummary = product && (
     <Card>
       <T kind="section">
-        {product.name} {s.quantity}개
+        {product.name} {s.quantity}
+        {productUnit}
       </T>
       <T>
         {product.options
@@ -354,7 +453,6 @@ export default function App() {
     </Card>
   );
   let body: React.ReactNode;
-  let searchStatus = '';
   let primary: ActionButton | undefined;
   let secondary: ActionButton[] = [];
   switch (s.flow) {
@@ -590,17 +688,15 @@ export default function App() {
     case 'V5-02s': {
       const nearby = s.flow === 'V5-02';
       const list = (nearby ? s.found : s.stores).filter(x => x.name.includes(s.query.trim()));
-      if (s.query.trim())
-        searchStatus = list.length ? `매장 검색 결과 ${list.length}곳` : '일치하는 매장이 없어요.';
       body = (
         <>
           {nearby && s.found[0] && subtitle(s.discovery === 'demo'
             ? '데모 매장을 선택해 주세요.'
             : `${s.found[0].name}을 찾았어요.`)}
-          {search('매장 이름으로 찾기')}
-          {sectionLabel(nearby && !s.query
-            ? `찾은 매장 · ${list.length}곳`
-            : nearby ? '매장 검색 결과' : `참여 매장 · ${list.length}곳`)}
+          {search('매장 이름 입력', '매장 이름으로 찾기')}
+          {s.query.trim()
+            ? sectionLabel(`검색 결과 · ${list.length}곳`, 'search-results')
+            : sectionLabel(nearby ? `찾은 매장 · ${list.length}곳` : `참여 매장 · ${list.length}곳`)}
           {list.slice(0, s.storeLimit).map(x => (
             <NavigationRow
               key={x.id}
@@ -687,7 +783,10 @@ export default function App() {
                 key={i}
                 icon="cup"
                 label={line.name}
-                value={`${line.labels.join(' · ')} · ${line.quantity}잔`}
+                value={`${line.labels.join(' · ')} · ${line.quantity}${unit(
+                  s.products,
+                  [line.productId],
+                )}`}
               />
             ))}
             <InfoRow
@@ -725,11 +824,7 @@ export default function App() {
     case 'V5-M1':
     case 'V5-05': {
       primary = {
-        label: s.cart.length
-          ? `장바구니 보기 · ${cartQuote?.quantity || s.cart.length}개 · ${money(
-              cartQuote?.total || 0,
-            )}`
-          : '장바구니 비어 있음',
+        label: '장바구니 보기',
         disabled: !s.cart.length,
         run: () => nav('V5-08'),
       };
@@ -770,51 +865,45 @@ export default function App() {
         .sort(
           (a, b) => Number(Boolean(b.popular)) - Number(Boolean(a.popular)),
         );
-      if (query) {
-        searchStatus = items.length
-          ? `메뉴 검색 결과 ${items.length}개`
-          : '일치하는 메뉴가 없어요. 다른 이름으로 찾아 주세요.';
-      }
       const last = s.history[s.storeId!];
       const recent = frequent(last, s.products);
       body = (
         <>
           {search('메뉴 이름 (예: 라떼)', '메뉴 이름으로 찾기')}
           {!query && recent.length > 0 && (
-            <details className="frequent-menu" key={s.storeId}>
-              <summary>자주 시킨 메뉴 {recent.length}개<span aria-hidden="true" /></summary>
-              <div className="menu-items">
-                {recent.map(p => {
-                  const line = last?.snapshot.items.find(
-                    i => i.productId === p.id,
-                  );
-                  return (
-                    <NavigationRow
-                      key={p.id}
-                      photo
-                      title={p.name}
-                      description={
-                        line
-                          ? [...line.labels, '지난번 그대로'].join(' · ')
-                          : undefined
-                      }
-                      price={line ? money(line.unitPrice) : undefined}
-                      onPress={() =>
-                        d({ type: 'SELECT_PRODUCT', id: p.id, recent: true })
-                      }
-                    />
-                  );
-                })}
-              </div>
-            </details>
+            <Foldable key={s.storeId} label={`자주 시킨 메뉴 ${recent.length}개`}>
+              {recent.map(p => {
+                const line = last?.snapshot.items.find(
+                  i => i.productId === p.id,
+                );
+                return (
+                  <NavigationRow
+                    key={p.id}
+                    photo
+                    title={p.name}
+                    // The options chosen last time, so they can be heard
+                    // before opening the menu (it opens with them selected).
+                    description={line?.labels.join(' · ') || undefined}
+                    price={line ? money(line.unitPrice) : undefined}
+                    onPress={() =>
+                      d({ type: 'SELECT_PRODUCT', id: p.id, recent: true })
+                    }
+                  />
+                );
+              })}
+            </Foldable>
           )}
           {!query && categories.length > 0 && <div className="section-divider" />}
           {!query &&
             categories.length > 0 &&
             (categories.length <= 3 ? (
-              <div className="category-tabs" role="radiogroup" aria-label="메뉴 분류">
-                {categories.map(c => {
-                  const selected = c === (s.category || categories[0]);
+              // All menus in one list: the bar jumps to a group. Otherwise it
+              // picks which group the list shows.
+              <div className="category-tabs" role={groupedMenu ? 'navigation' : 'radiogroup'} aria-label="메뉴 분류">
+                {categories.map((c, i) => {
+                  const selected = groupedMenu
+                    ? i === currentGroup
+                    : c === (s.category || categories[0]);
                   return (
                     <View
                       key={c}
@@ -840,15 +929,22 @@ export default function App() {
                       >
                         {c}
                       </T>
-                      <ChoiceInput
-                        name="menu-category"
-                        label={c}
-                        selected={selected}
-                        onChange={() => {
-                          d({ type: 'CATEGORY', value: c });
-                          if (groupedMenu) document.getElementById(`menu-section-${categories.indexOf(c)}`)?.scrollIntoView({ block: 'start' });
-                        }}
-                      />
+                      {groupedMenu ? (
+                        <button
+                          type="button"
+                          className="choice-input"
+                          aria-label={c}
+                          aria-current={selected ? 'location' : undefined}
+                          onClick={() => jumpToGroup(i)}
+                        />
+                      ) : (
+                        <ChoiceInput
+                          name="menu-category"
+                          label={c}
+                          selected={selected}
+                          onChange={() => d({ type: 'CATEGORY', value: c })}
+                        />
+                      )}
                     </View>
                   );
                 })}
@@ -861,8 +957,10 @@ export default function App() {
             const visible = groupedMenu ? groupItems : groupItems.slice(0, s.menuLimit);
             if (!visible.length) return null;
             return (
-              <section className="menu-group" key={group} id={`menu-section-${categories.indexOf(group)}`}>
-                {sectionLabel(query ? group : `${group} · ${groupItems.length}개`)}
+              <section className="menu-group" key={group} data-group={query ? undefined : categories.indexOf(group)}>
+                {query
+                  ? sectionLabel(`${group} · ${groupItems.length}개`, 'search-results')
+                  : sectionLabel(`${group} · ${groupItems.length}개`)}
                 <div className="menu-items">
                   {visible.map(p => (
                     <NavigationRow
@@ -882,7 +980,9 @@ export default function App() {
             );
           })}
           {!items.length && (
-            <T>일치하는 메뉴가 없어요. 다른 이름으로 찾아 주세요.</T>
+            <T nativeID={query ? 'search-results' : undefined}>
+              일치하는 메뉴가 없어요. 다른 이름으로 찾아 주세요.
+            </T>
           )}
           {!groupedMenu && items.length > s.menuLimit && (
             <Button
@@ -902,6 +1002,7 @@ export default function App() {
         {productSummary}
         <AddedSheet
           summary={cartQuote?.items[cartQuote.items.length - 1]}
+          unit={productUnit}
           total={cartQuote?.total}
           menu={menu}
           cart={() => nav('V5-08')}
@@ -916,21 +1017,25 @@ export default function App() {
           {product && options(product.options)}
           {quantity}
           <Card>
-            <T kind="small">최종 금액</T>
-            <T
-              style={{
-                fontSize: 36 * theme.scale,
-                lineHeight: 50.4 * theme.scale,
-                fontWeight: '700',
-              }}
-            >
-              {money(selectedTotal)}
-            </T>
+            {/* One text block in reading order: "최종 금액 7,000원 1잔당 3,500원
+                · 총 2잔". Separate pieces were read with "곱셈" in between. */}
             <T kind="small">
-              1{unit}당 {money(selectedTotal / s.quantity)} · 총 {s.quantity}{unit}
+              최종 금액{'\n'}
+              <T
+                style={{
+                  fontSize: 36 * theme.scale,
+                  lineHeight: 50.4 * theme.scale,
+                  fontWeight: '700',
+                }}
+              >
+                {money(selectedTotal)}
+              </T>
+              {'\n'}1{productUnit}당 {money(selectedTotal / s.quantity)} · 총{' '}
+              {s.quantity}
+              {productUnit}
               {product?.options.some(g => g.id === 'temperature') &&
               !s.selected.temperature
-                ? ' · 온도를 먼저 골라 주세요'
+                ? '\n온도를 먼저 골라 주세요'
                 : ''}
             </T>
           </Card>
@@ -1001,7 +1106,7 @@ export default function App() {
           {store && (
             <Card compact>
               <InfoRow icon="store" label="주문 매장" value={store.name} />
-              <InfoRow icon="bag" label="담은 메뉴" value={`${s.cart.length}종류 · 총 ${s.cart.reduce((n, line) => n + line.quantity, 0)}개`} />
+              <InfoRow icon="bag" label="담은 메뉴" value={`${s.cart.length}종류 · 총 ${cartCount}${cartUnit}`} />
             </Card>
           )}
           {!s.cart.length && (
@@ -1011,8 +1116,8 @@ export default function App() {
           )}
           {s.cart.map((l, i) => (
             <Card key={l.id}>
-              <View style={[st.row, { alignItems: 'flex-start' }]}>
-                <View style={st.grow}>
+              <View style={[st.row, st.wrap, { alignItems: 'flex-start' }]}>
+                <View style={[st.grow, { flexBasis: 120 }]}>
                   <T kind="section">
                     {s.products.find(p => p.id === l.productId)?.name || '메뉴'}
                   </T>
@@ -1030,7 +1135,7 @@ export default function App() {
               <Stepper
                 compact
                 quantity={l.quantity}
-                unit={unitFor(s.products.find(p => p.id === l.productId)?.category)}
+                unit={unit(s.products, [l.productId])}
                 onChange={value =>
                   d({
                     type: 'CART_QUANTITY',
@@ -1039,8 +1144,8 @@ export default function App() {
                   })
                 }
               />
-              <View style={st.row}>
-                <View style={st.grow}>
+              <View style={[st.row, st.wrap]}>
+                <View style={[st.grow, { flexBasis: 110 }]}>
                   <Button
                     appearance="compact"
                     label="옵션 변경"
@@ -1053,7 +1158,7 @@ export default function App() {
                     }
                   />
                 </View>
-                <View style={st.grow}>
+                <View style={[st.grow, { flexBasis: 110 }]}>
                   <Button
                     appearance="compact"
                     label="삭제"
@@ -1176,7 +1281,7 @@ export default function App() {
     case 'P01-E1':
       body = (
         <>
-          {s.changed && <Receipt value={s.changed} />}
+          {s.changed && <Receipt value={s.changed} products={s.products} />}
           <T>변경 내용을 확인한 뒤 장바구니에서 다시 결제해 주세요.</T>
         </>
       );
@@ -1218,7 +1323,7 @@ export default function App() {
               확인해 주세요.
             </T>
           </Card>
-          {s.payment && <Receipt value={s.payment.snapshot} />}
+          {s.payment && <Receipt value={s.payment.snapshot} products={s.products} />}
         </>
       );
       primary = { label: '결제 결과 다시 확인', run: () => nav('P02-V') };
@@ -1286,11 +1391,10 @@ export default function App() {
                 return (
                   <View
                     key={label}
-                    accessible
-                    accessibilityLabel={`${label}, ${phase}`}
                     style={[st.row, { minHeight: 42, paddingVertical: 4 }]}
                   >
                     <View
+                      aria-hidden
                       style={{
                         width: 26,
                         height: 26,
@@ -1326,8 +1430,11 @@ export default function App() {
                       }}
                     >
                       {label}
+                      {/* Read as "주문 전달, 완료"; the visible state on the
+                          right is the same word, so it is hidden. */}
+                      <span className="visually-hidden">, {phase}</span>
                     </T>
-                    <T kind="small" style={{ fontWeight: '700' }}>
+                    <T aria-hidden kind="small" style={{ fontWeight: '700' }}>
                       {phase}
                     </T>
                   </View>
@@ -1340,7 +1447,7 @@ export default function App() {
               icon="cup"
               label="주문 상품"
               value={s.order.snapshot.items
-                .map(x => [x.name, ...x.labels, `${x.quantity}${unitFor(s.products.find(p => p.id === x.productId)?.category)}`].join(' '))
+                .map(x => [x.name, ...x.labels, `${x.quantity}${unit(s.products, [x.productId])}`].join(' '))
                 .join(' · ')}
             />
             <InfoRow
@@ -1364,8 +1471,6 @@ export default function App() {
         <>
           {subtitle('픽업대에서 주문번호를 보여주거나 말해 주세요.')}
           <View
-            accessible
-            accessibilityLabel={`주문번호 ${s.order.number}`}
             style={{
               backgroundColor: '#191919',
               borderRadius: 20,
@@ -1374,17 +1479,17 @@ export default function App() {
             }}
           >
             <T kind="small" style={{ color: '#FFFFFF' }}>
-              주문번호
-            </T>
-            <T
-              style={{
-                color: '#FFFFFF',
-                fontSize: 60 * theme.scale,
-                lineHeight: 84 * theme.scale,
-                fontWeight: '700',
-              }}
-            >
-              {s.order.number}
+              주문번호{'\n'}
+              <T
+                style={{
+                  color: '#FFFFFF',
+                  fontSize: 60 * theme.scale,
+                  lineHeight: 84 * theme.scale,
+                  fontWeight: '700',
+                }}
+              >
+                {s.order.number}
+              </T>
             </T>
           </View>
           <Card compact>
@@ -1442,14 +1547,20 @@ export default function App() {
       : undefined;
   const screenMessage =
     s.flow === 'P02-V' || s.flow === 'V5-05c' ? '' : s.message;
+  // Waiting screens do not take focus (see above), so say what is happening.
+  // Not while the browser's Bluetooth chooser is open on top of the page.
+  const waitingStatus =
+    waiting && s.flow !== 'BOOT' && !(s.flow === 'V5-01' && s.discovery === 'ble')
+      ? title
+      : '';
   return (
     <ThemeContext.Provider value={theme}>
-      <div className={`app-frame${entryScreen ? ' entry-frame' : ''}`} data-flow={s.flow} style={{ backgroundColor: theme.bg, color: theme.text, '--page': theme.bg, '--card': theme.card, '--divider': s.settings.dark ? theme.line : '#DCDDE2', '--muted': theme.muted, '--line': theme.line, '--scale': theme.scale } as React.CSSProperties}>
+      <div className={`app-frame${entryScreen ? ' entry-frame' : ''}`} data-flow={s.flow} style={{ backgroundColor: theme.bg, color: theme.text, '--page': theme.bg, '--card': theme.card, '--divider': s.settings.dark ? theme.line : '#DCDDE2', '--muted': theme.muted, '--line': theme.line, '--scale': theme.scale, '--gutter': theme.compact ? '12px' : '20px' } as React.CSSProperties}>
         <div className="visually-hidden" role="alert">
-          {s.error !== 'CHANGE_STORE' ? s.error : ''}
+          {alertText}
         </div>
         <div className="visually-hidden" role="status">
-          {searchStatus || screenMessage}
+          {waitingStatus || s.notice || screenMessage}
         </div>
         <View style={[st.header, { borderBottomWidth: 1.5, borderColor: titleScrolled ? (s.settings.dark ? theme.line : '#E1E2E6') : 'transparent' }]}>
           {!['BOOT', 'START', 'V5-O1'].includes(s.flow) && (
@@ -1468,7 +1579,8 @@ export default function App() {
               </T>
             </Pressable>
           )}
-          <div className="compact-title" aria-hidden="true">{titleScrolled ? shortTitle : ''}</div>
+          {/* No room for it between 뒤로 and 설정 when zoomed in or with large text. */}
+          <div className="compact-title" aria-hidden="true">{titleScrolled && !theme.compact ? shortTitle : ''}</div>
           {s.flow !== 'SETTINGS' && (
             <Pressable
               accessibilityRole="button"
@@ -1491,21 +1603,23 @@ export default function App() {
                 />
               )}
               {productHeading && <Photo large />}
-              <Text
+              {/* A plain <h1>: no extra role, and tabindex only while focused.
+                  A new element per screen, so focusing it is always announced,
+                  even when the user's cursor was on the previous title. */}
+              <h1
+                key={`${s.flow}:${s.revision}`}
                 ref={heading}
-                accessibilityRole="header"
-                accessible
                 style={{
+                  margin: 0,
                   fontSize: 26 * theme.scale,
-                  lineHeight: 36.4 * theme.scale,
-                  includeFontPadding: false,
+                  lineHeight: `${36.4 * theme.scale}px`,
                   fontFamily,
-                  fontWeight: '700',
+                  fontWeight: 700,
                   color: theme.text,
                 }}
               >
                 {title}
-              </Text>
+              </h1>
               {!!s.error &&
                 s.error !== 'CHANGE_STORE' &&
                 !['E01', 'E02', 'E04', 'E05'].includes(s.flow) && (
@@ -1539,8 +1653,8 @@ export default function App() {
             (cartScreen ? (
               <CartBar
                 testID="primary-action"
-                label={primary.label}
-                quantity={s.cart.reduce((n, line) => n + line.quantity, 0)}
+                quantity={cartCount}
+                unit={cartUnit}
                 total={
                   cartQuote
                     ? money(cartQuote.total)
@@ -1581,8 +1695,29 @@ export default function App() {
     </ThemeContext.Provider>
   );
 }
-function AddedSheet({ summary, total, menu, cart }: {
-  summary?: PricedLine; total?: number; menu: () => void; cart: () => void;
+// A row that shows or hides the items under it ("자주 시킨 메뉴"). A real
+// button with aria-expanded, so a screen reader reads the whole row as one
+// item: "자주 시킨 메뉴 2개, 축소됨". The <details>/<summary> it replaces was
+// read in pieces on iPhone.
+function Foldable({ label, children }: { label: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="frequent-menu">
+      <button
+        type="button"
+        className="frequent-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+      >
+        {label}
+        <span aria-hidden="true" />
+      </button>
+      {open && <div className="menu-items">{children}</div>}
+    </div>
+  );
+}
+function AddedSheet({ summary, unit, total, menu, cart }: {
+  summary?: PricedLine; unit: string; total?: number; menu: () => void; cart: () => void;
 }) {
   const sheet = useRef<HTMLDialogElement>(null);
   const title = useRef<HTMLHeadingElement>(null);
@@ -1600,21 +1735,22 @@ function AddedSheet({ summary, total, menu, cart }: {
       <div>
         <h2 id="added-title" ref={title} tabIndex={-1} className="section-heading">장바구니에 담았어요</h2>
         {summary && <InfoRow icon="bag" label="방금 담은 메뉴"
-          value={[summary.name, ...summary.labels, `${summary.quantity}개`].join(' · ')} />}
+          value={[summary.name, ...summary.labels, `${summary.quantity}${unit}`].join(' · ')} />}
         <Button primary label={total === undefined ? '장바구니로 이동' : `장바구니로 이동 · ${money(total)}`} onPress={cart} />
         <Button label="메뉴 더 고르기" onPress={menu} />
       </div>
     </dialog>
   );
 }
-function Receipt({ value }: { value: Quote }) {
+function Receipt({ value, products }: { value: Quote; products: Product[] }) {
   return (
     <Card>
       <T kind="section">주문 내용</T>
       {value.items.map((l, i) => (
         <View key={i} style={{ gap: 6 }}>
           <T>
-            {l.name} {l.quantity}개
+            {l.name} {l.quantity}
+            {unit(products, [l.productId])}
           </T>
           <T kind="small">{l.labels.join(', ')}</T>
           <T>{money(l.total)}</T>

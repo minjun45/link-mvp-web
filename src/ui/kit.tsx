@@ -11,6 +11,9 @@ export type Theme = {
   danger: string;
   scale: number;
   contrast: boolean;
+  /** Narrow screen (zoomed in, or 큰 글씨 on a small phone): less padding,
+   *  no decorative icons, and side-by-side items may wrap. */
+  compact: boolean;
 };
 export const light: Theme = {
   bg: '#F2F3F5',
@@ -22,6 +25,7 @@ export const light: Theme = {
   danger: '#A91D26',
   scale: 1,
   contrast: false,
+  compact: false,
 };
 export const ThemeContext = createContext(light);
 export function T({
@@ -67,7 +71,7 @@ export function Card({
       style={{
         backgroundColor: t.card,
         borderRadius: 16,
-        paddingHorizontal: 24,
+        paddingHorizontal: t.compact ? 14 : 24,
         paddingVertical: compact ? 12 : 16,
         gap: compact ? 2 : 12,
         borderWidth: t.contrast ? 2 : 0,
@@ -154,6 +158,7 @@ export const styles = StyleSheet.create({
   stack: { gap: 16 },
   row: { flexDirection: 'row', gap: 10, alignItems: 'center' },
   grow: { flex: 1 },
+  wrap: { flexWrap: 'wrap' },
   input: {
     minHeight: 64,
     borderWidth: 2,

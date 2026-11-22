@@ -54,6 +54,9 @@ const signals: Record<string, { frequency: number; vibration: number[] }> = {
   selected: { frequency: 520, vibration: [40] },
   success: { frequency: 780, vibration: [90, 55, 120] },
   error: { frequency: 260, vibration: [180] },
+  // Voice search started. A tone, not speech: the microphone would pick up
+  // a spoken announcement as the search words.
+  listen: { frequency: 880, vibration: [30, 40, 30] },
 };
 let audio: AudioContext | undefined;
 

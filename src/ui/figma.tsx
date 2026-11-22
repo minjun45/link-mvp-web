@@ -54,6 +54,8 @@ export function Icon({
   color?: string;
 }) {
   return (
+    // Icons are decoration. Hidden, because react-native-web draws each one
+    // with an invisible <img> that VoiceOver otherwise stops on as "이미지".
     <Image
       aria-hidden
       accessible={false}
@@ -67,6 +69,7 @@ export function Icon({
 export function Photo({ large = false }: { large?: boolean }) {
   const theme = useContext(ThemeContext);
   return (
+    // A placeholder, not a real photo, so there is nothing to read.
     <View
       aria-hidden
       accessible={false}
@@ -97,12 +100,16 @@ export function InfoRow({
 }) {
   const theme = useContext(ThemeContext);
   return (
-    <View
-      style={styles.infoRow}
-    >
-      <Icon name={icon} color={theme.text} />
-      <View style={styles.copy}>
-        <T kind="small" style={{ fontSize: 15 * theme.scale, lineHeight: 21 * theme.scale, fontWeight: '500' }}>{label}</T>
+    <View style={styles.infoRow}>
+      {!theme.compact && <Icon name={icon} color={theme.text} />}
+      {/* Real text, label then value, in one block. An aria-label on a plain
+          <div> is ignored by some screen readers (iPhone skipped rows). */}
+      <T
+        kind="small"
+        style={[styles.copy, { fontSize: 15 * theme.scale, lineHeight: 21 * theme.scale, fontWeight: '500' }]}
+      >
+        {label}
+        {'\n'}
         <T
           style={{
             fontSize: 20 * theme.scale,
@@ -112,7 +119,7 @@ export function InfoRow({
         >
           {value}
         </T>
-      </View>
+      </T>
     </View>
   );
 }
@@ -155,6 +162,7 @@ export function NavigationRow({
       style={({ pressed }) => [
         styles.navRow,
         photo && styles.menuRow,
+        theme.compact && styles.compactRow,
         {
           backgroundColor: theme.card,
           borderWidth: theme.contrast ? 2 : 0,
@@ -163,7 +171,11 @@ export function NavigationRow({
         },
       ]}
     >
-      {photo ? <Photo /> : icon && <Icon name={icon} color={theme.text} />}
+      {theme.compact
+        ? null
+        : photo
+        ? <Photo />
+        : icon && <Icon name={icon} color={theme.text} />}
       <View style={styles.copy}>
         <T
           style={{
@@ -283,21 +295,22 @@ export function OptionRow({
 
 export function Stepper({
   quantity,
+  unit,
   onChange,
   compact = false,
-  unit = '개',
 }: {
   quantity: number;
+  unit: string;
   onChange: (value: number) => void;
   compact?: boolean;
-  unit?: string;
 }) {
   const theme = useContext(ThemeContext);
-  const size = compact ? 56 : 68;
+  const size = theme.compact ? 48 : compact ? 56 : 68;
   return (
     <View
       style={[
         styles.stepper,
+        theme.compact && { gap: 6 },
         !compact && {
           backgroundColor: theme.card,
           padding: 10,
@@ -320,7 +333,8 @@ export function Stepper({
                   flex: 1,
                 }}
               >
-                <span aria-live="polite" aria-atomic="true">{quantity}{unit}</span>
+                {quantity}
+                {unit}
               </T>
             )}
             <Pressable
@@ -362,34 +376,41 @@ export function Stepper({
 }
 
 export function CartBar({
-  label,
   quantity,
+  unit,
   total,
   onPress,
   testID,
   disabled,
 }: {
-  label: string;
   quantity: number;
+  unit: string;
   total: string;
   onPress: () => void;
   testID?: string;
   disabled: boolean;
 }) {
+  const theme = useContext(ThemeContext);
+  const summary = quantity ? `장바구니 ${quantity}${unit}` : '장바구니 비어 있음';
   return (
     <Pressable
       testID={testID}
       accessibilityRole="button"
-      accessibilityLabel={label}
+      // Read the same words the bar shows, in the same order.
+      accessibilityLabel={quantity ? `${summary}, ${total}, 보기` : summary}
       aria-disabled={disabled}
       disabled={disabled}
       onPress={onPress}
-      style={({ pressed }) => [styles.cart, { opacity: pressed ? 0.8 : 1 }]}
+      style={({ pressed }) => [
+        styles.cart,
+        theme.compact && { flexWrap: 'wrap', paddingHorizontal: 12 },
+        { opacity: pressed ? 0.8 : 1 },
+      ]}
     >
-      <Icon name="bag" color="#FFFFFF" />
-      <View style={styles.copy}>
-        <T style={styles.cartText}>
-          {quantity ? `장바구니 ${quantity}개` : '장바구니 비어 있음'}
+      {!theme.compact && <Icon name="bag" color="#FFFFFF" />}
+      <View style={[styles.copy, { flexBasis: 100 }]}>
+        <T style={[styles.cartText, { fontSize: 15 * theme.scale, lineHeight: 20 * theme.scale }]}>
+          {summary}
         </T>
         <T kind="section" style={{ color: '#FFFFFF' }}>
           {total}
@@ -435,6 +456,7 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   menuRow: { minHeight: 105, paddingLeft: 14, paddingRight: 10 },
+  compactRow: { paddingHorizontal: 12, gap: 8 },
   tag: {
     color: '#FFFFFF',
     backgroundColor: '#191919',
