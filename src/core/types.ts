@@ -182,6 +182,8 @@ export type State = Snapshot & {
   discoveryReady: boolean;
   error: string;
   message: string;
+  /** Read by screen readers only (status region), e.g. a new quantity. */
+  notice: string;
   missingGroup?: string;
   changed?: Quote;
   signal?: string;

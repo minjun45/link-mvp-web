@@ -5,6 +5,16 @@ export const key = () =>
     .slice(2)}_${Math.random().toString(36).slice(2)}`;
 export const money = (n: number) =>
   `${Math.round(n).toLocaleString('ko-KR')}원`;
+// Drinks are counted in cups (잔); desserts and anything unknown in pieces (개).
+// A mix of both is counted in pieces.
+const cupCategories = ['커피', '음료'];
+export const unitFor = (category?: string) =>
+  cupCategories.includes(category || '') ? '잔' : '개';
+export const unit = (products: Product[], productIds: string[]) =>
+  productIds.length > 0 &&
+  productIds.every(id => unitFor(products.find(p => p.id === id)?.category) === '잔')
+    ? '잔'
+    : '개';
 export function quote(
   store: Store | undefined,
   products: Product[],

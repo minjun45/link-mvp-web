@@ -248,14 +248,16 @@ test('payment success remains on explicit V5-10 until user opens order status', 
   expect(s.flow).toBe('V5-10');
   expect(reduce(s, { type: 'OPEN_ORDER' }).flow).toBe('V5-12');
 });
-test('a ready order leaves the status screen in place until pickup information is requested', () => {
+test('a ready order opens pickup once and Back can revisit the status screen', () => {
   const o = order(cart());
   const status = reduce({ ...initial, order: o }, { type: 'OPEN_ORDER' });
   const update = { type: 'ORDER_UPDATED', order: { ...o, status: 'ready' } } as const;
   const ready = reduce(status, update);
-  expect(ready).toMatchObject({ flow: 'V5-11', revision: status.revision, message: '음료가 준비됐어요. 픽업 정보를 확인해 주세요.' });
-  expect(reduce(ready, update)).toEqual(ready);
-  expect(reduce(ready, { type: 'OPEN_ORDER' }).flow).toBe('V5-12');
+  expect(ready).toMatchObject({ flow: 'V5-12', message: '', notice: '' });
+  const previous = reduce(ready, { type: 'BACK' });
+  expect(previous.flow).toBe('V5-11');
+  expect(reduce(previous, update)).toEqual(previous);
+  expect(reduce(previous, { type: 'OPEN_ORDER' }).flow).toBe('V5-12');
 });
 test('price changes interrupt payment; cancellation retains cart and uncertain verification does not loop', () => {
   let s = reduce(cart(), { type: 'CHECKOUT', key: 'payment-key' });
@@ -317,4 +319,48 @@ test('retry starts one fresh checkout only after a confirmed terminal payment', 
   expect(restarted.payment).toBeUndefined();
   expect(reduce(restarted, retry)).toBe(restarted);
   expect(reduce({ ...failed, flow: 'P02-V' }, retry).flow).toBe('P02-V');
+});
+test('quantity changes are announced with the right unit; leaving the screen or removing a line clears it', () => {
+  let s = reduce(menu(), { type: 'SELECT_PRODUCT', id: 'cookie' });
+  s = reduce(s, { type: 'QUANTITY', value: 3 });
+  expect(s.notice).toBe('3개');
+  s = reduce(s, { type: 'ADD', id: 'c' });
+  expect(s.notice).toBe('');
+  expect(s.message).toBe('초콜릿 쿠키 3개를 담았어요.');
+  s = reduce(reduce(cart(), { type: 'NAV', flow: 'V5-08' }), {
+    type: 'CART_QUANTITY',
+    id: 'one',
+    delta: 1,
+  });
+  expect(s.notice).toBe(`${p.name} 2잔`);
+  s = reduce(s, { type: 'REMOVE', id: 'one' });
+  expect(s.notice).toBe('');
+  expect(s.message).toBe('메뉴를 삭제했어요.');
+});
+test('order ready signals once and lets the pickup heading announce the transition', () => {
+  const o = order(cart());
+  let s: State = { ...cart(), flow: 'V5-11', order: { ...o, status: 'preparing' } };
+  s = reduce(s, { type: 'ORDER_UPDATED', order: { ...o, status: 'ready' } });
+  expect(s.flow).toBe('V5-12');
+  expect(s.message).toBe('');
+  expect(s.signal).toBe('found');
+  const afterAnnouncement = { ...s, signal: undefined, message: '' };
+  expect(reduce(afterAnnouncement, { type: 'ORDER_UPDATED', order: s.order! })).toEqual(afterAnnouncement);
+});
+test('choosing a category from the category screen opens the menu without a status message over its title', () => {
+  const s = reduce({ ...menu(), flow: 'V5-M1' }, { type: 'CATEGORY', value: '커피' });
+  expect(s.flow).toBe('V5-05');
+  expect(s.message).toBe('');
+  const inPlace = reduce(menu(), { type: 'CATEGORY', value: '커피' });
+  expect(inPlace.message).toMatch(/^커피 메뉴 \d+개$/);
+});
+test('the sold-out message goes away once the list changes', () => {
+  const m = menu();
+  const soldOut = m.products.find(p => p.soldOut)!;
+  let s = reduce(m, { type: 'SELECT_PRODUCT', id: soldOut.id });
+  expect(s.error).toBe('품절된 메뉴는 선택할 수 없어요.');
+  s = reduce(s, { type: 'QUERY', value: '아메' });
+  expect(s.error).toBe('');
+  s = reduce(reduce(m, { type: 'SELECT_PRODUCT', id: soldOut.id }), { type: 'MORE_MENU' });
+  expect(s.error).toBe('');
 });

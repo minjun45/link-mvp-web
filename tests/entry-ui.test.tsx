@@ -145,20 +145,22 @@ test('footer has no shared replay button; order screens keep their own replay ac
   expect(buttonTexts(render('V5-11', { order }))).not.toContain('픽업 정보 보기');
   const ready = render('V5-11', { order: { ...order, status: 'ready' } });
   expect(buttonTexts(ready)).toEqual(expect.arrayContaining(['픽업 정보 보기', '주문 상태 다시 듣기']));
-  expect(ready).toContain('aria-label="픽업 가능, 지금"');
+  expect(ready).toMatch(/픽업 가능<span class="visually-hidden">, 지금<\/span>/);
   expect(render('V5-12', { order: { ...order, status: 'ready' } })).toContain('주문번호 다시 듣기');
 });
 
-test('store and menu search each expose one field label without a duplicate native placeholder', () => {
-  for (const [flow, label] of [
-    ['V5-02s', '매장 이름으로 찾기'],
-    ['V5-05', '메뉴 이름으로 찾기'],
+test('store and menu search: the name says what the field is for, the native placeholder gives a hint', () => {
+  for (const [flow, label, hint] of [
+    ['V5-02s', '매장 이름으로 찾기', '매장 이름 입력'],
+    ['V5-05', '메뉴 이름으로 찾기', '메뉴 이름 (예: 라떼)'],
   ] as const) {
     const html = render(flow, { storeId: catalog.stores[0].id });
-    expect(html.match(/<input\b[^>]*>/g)).toHaveLength(1);
-    const input = html.match(/<input\b[^>]*>/)![0];
+    expect(html.match(/<input\b(?![^>]*type="radio")[^>]*>/g)).toHaveLength(1);
+    const input = html.match(/<input\b(?![^>]*type="radio")[^>]*>/)![0];
     expect(input).toContain(`aria-label="${label}"`);
-    expect(input).not.toContain('placeholder=');
-    expect(html).toContain('aria-hidden="true"');
+    expect(input).toContain(`placeholder="${hint}"`);
+    // No second copy of the hint drawn over the field.
+    expect(html.match(new RegExp(hint.replace(/[()]/g, '\\$&'), 'g'))).toHaveLength(1);
+    expect(buttonTexts(html)).toContain('말하기');
   }
 });
