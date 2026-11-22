@@ -705,15 +705,6 @@ export default function App() {
     }
     case 'V5-M1':
     case 'V5-05': {
-      primary = {
-        label: s.cart.length
-          ? `장바구니 보기 · ${cartQuote?.quantity || s.cart.length}개 · ${money(
-              cartQuote?.total || 0,
-            )}`
-          : '장바구니 비어 있음',
-        disabled: !s.cart.length,
-        run: () => nav('V5-08'),
-      };
       if (s.flow === 'V5-M1' && !s.query.trim()) {
         body = (
           <>
@@ -853,7 +844,6 @@ export default function App() {
                       description={p.soldOut ? '오늘 준비 수량 소진' : p.description}
                       price={p.soldOut ? undefined : money(p.price)}
                       tag={p.soldOut ? '품절' : undefined}
-                      label={p.soldOut ? `${p.name}, 품절, 오늘 준비 수량 소진` : undefined}
                       disabled={p.soldOut}
                       onPress={() => d({ type: 'SELECT_PRODUCT', id: p.id })}
                     />
@@ -1499,32 +1489,24 @@ export default function App() {
           </div>
           {hasMore && <div aria-hidden="true" className="more-hint"><span>아래에 더 있어요</span></div>}
         </div>
-        {(primary || (pinSecondary && secondary.length > 0) || s.settings.staffHelp) && <div className="fixed-footer" data-testid="fixed-footer">
-          {primary &&
-            (cartScreen ? (
-              <CartBar
-                testID="primary-action"
-                label={primary.label}
-                quantity={s.cart.reduce((n, line) => n + line.quantity, 0)}
-                total={
-                  cartQuote
-                    ? money(cartQuote.total)
-                    : s.cart.length
-                    ? '금액 확인 필요'
-                    : '0원'
-                }
-                onPress={primary.run}
-                disabled={!!primary.disabled}
-              />
-            ) : (
-              <Button
-                testID="primary-action"
-                primary={!primary.neutral}
-                label={primary.label}
-                onPress={primary.run}
-                disabled={primary.disabled}
-              />
-            ))}
+        {(cartScreen || primary || (pinSecondary && secondary.length > 0) || s.settings.staffHelp) && <div className="fixed-footer" data-testid="fixed-footer">
+          {cartScreen ? (
+            <CartBar
+              testID="primary-action"
+              quantity={s.cart.reduce((n, line) => n + line.quantity, 0)}
+              total={cartQuote ? money(cartQuote.total) : s.cart.length ? '금액 확인 필요' : '0원'}
+              onPress={() => nav('V5-08')}
+              disabled={!s.cart.length}
+            />
+          ) : primary && (
+            <Button
+              testID="primary-action"
+              primary={!primary.neutral}
+              label={primary.label}
+              onPress={primary.run}
+              disabled={primary.disabled}
+            />
+          )}
           {pinSecondary &&
             secondary.map(b => (
               <Button

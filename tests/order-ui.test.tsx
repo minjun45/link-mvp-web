@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, test, vi } from 'vitest';
 import type { Product, State } from '../src/core/types';
 import { initial } from '../src/core/flow';
+import { defaults } from '../src/core/domain';
 import catalog from '../src/data/catalog.json';
 import App from '../App';
 
@@ -33,8 +34,10 @@ test('menu search field is named by its purpose; the example stays visible but h
 
 test('sold-out menu reads its name and 품절 as one disabled button', () => {
   const html = render('V5-05', { category: product('디카페인 커피').category });
-  const row = html.match(/<button\b[^>]*aria-label="디카페인 커피, 품절, 오늘 준비 수량 소진"[^>]*>/)?.[0];
+  const row = html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g)?.find(button => button.includes('디카페인 커피'));
   expect(row).toMatch(/\sdisabled(?:=|\s|>)/);
+  expect(row).toMatch(/디카페인 커피[\s\S]*오늘 준비 수량 소진[\s\S]*품절/);
+  expect(row).not.toContain('aria-label=');
 });
 
 test('native controls use their implicit tab order and buttons use their implicit role', () => {
@@ -72,12 +75,20 @@ test('category message is announced once, not repeated as text after the last me
   expect(render('V5-05', { query: '라' })).toContain('검색 결과');
 });
 
-test('empty cart button reads like its visible text', () => {
-  expect(render('V5-05')).toContain('aria-label="장바구니 비어 있음"');
-  const cart = [{ id: 'l1', productId: product('아메리카노').id, quantity: 1, options: { temperature: 'ice' } }];
-  const html = render('V5-05', { cart });
-  expect(html).not.toContain('aria-label="장바구니 비어 있음"');
-  expect(html).toMatch(/aria-label="장바구니 보기 · 1개 · /);
+test('cart button uses its visible quantity, amount and action even when a quote is unavailable', () => {
+  const americano = product('아메리카노');
+  const line = { id: 'l1', productId: americano.id, quantity: 2, options: defaults(americano) };
+  for (const [cart, expected] of [
+    [[], '장바구니 비어 있음 0원 보기'],
+    [[line], '장바구니 2개 5,000원 보기'],
+    [[{ ...line, productId: 'missing' }], '장바구니 2개 금액 확인 필요 보기'],
+  ] as const) {
+    const html = render('V5-05', { cart: [...cart] });
+    const button = html.match(/<button\b[^>]*class="app-button cart-button"[^>]*>[\s\S]*?<\/button>/)?.[0];
+    expect(button).toBeDefined();
+    expect(button).not.toContain('aria-label=');
+    expect(button?.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).toBe(expected);
+  }
 });
 
 test('menu search accepts both spellings of latte and spaces in a spoken menu name', () => {

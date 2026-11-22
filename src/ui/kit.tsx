@@ -109,7 +109,6 @@ export function Button({
       className="app-button action-button"
       data-testid={testID}
       role={selected === undefined ? undefined : 'radio'}
-      aria-label={label}
       aria-description={hint}
       aria-checked={selected}
       disabled={disabled}
@@ -143,7 +142,7 @@ export function Button({
           fontWeight: '700',
         }}
       >
-        {selected ? '✓ ' : ''}
+        {selected && <span aria-hidden="true">✓ </span>}
         {label}
       </T>
     </button>

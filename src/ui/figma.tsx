@@ -124,7 +124,6 @@ export function NavigationRow({
   icon,
   photo,
   tag,
-  label,
   onPress,
   disabled,
 }: {
@@ -134,8 +133,6 @@ export function NavigationRow({
   icon?: IconName;
   photo?: boolean;
   tag?: string;
-  /** Screen-reader name when the joined visible text is not the best reading. */
-  label?: string;
   onPress: () => void;
   disabled?: boolean;
 }) {
@@ -144,9 +141,6 @@ export function NavigationRow({
     <button
       type="button"
       className={photo ? 'app-button nav-button menu-button' : 'app-button nav-button'}
-      aria-label={
-        label || [title, description, price, tag].filter(Boolean).join(', ')
-      }
       disabled={disabled}
       onClick={onPress}
       style={{
@@ -353,14 +347,12 @@ export function Stepper({
 }
 
 export function CartBar({
-  label,
   quantity,
   total,
   onPress,
   testID,
   disabled,
 }: {
-  label: string;
   quantity: number;
   total: string;
   onPress: () => void;
@@ -372,7 +364,6 @@ export function CartBar({
       type="button"
       className="app-button cart-button"
       data-testid={testID}
-      aria-label={label}
       disabled={disabled}
       onClick={onPress}
     >
