@@ -1,5 +1,5 @@
 import React, { createContext, useContext } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 export const fontFamily = 'Pretendard, LinkNoto, sans-serif';
 export type Theme = {
   bg: string;
@@ -108,19 +108,18 @@ export function Button({
   const compact = appearance === 'compact' || appearance === 'dark';
   const dark = appearance === 'dark';
   return (
-    <Pressable
-      testID={testID}
-      accessibilityRole={selected === undefined ? 'button' : 'radio'}
-      accessibilityLabel={label}
-      accessibilityHint={hint}
-      aria-disabled={disabled}
+    <button
+      type="button"
+      className="app-button action-button"
+      data-testid={testID}
+      role={selected === undefined ? undefined : 'radio'}
+      aria-description={hint}
       aria-checked={selected}
       disabled={disabled}
-      onPress={onPress}
-      style={({ pressed }) => ({
+      onClick={onPress}
+      style={{
         minHeight: utility ? 60 : compact ? 56 : 72,
-        paddingVertical: compact || utility ? 10 : 14,
-        paddingHorizontal: compact || utility ? 8 : 16,
+        padding: compact || utility ? '10px 8px' : '14px 16px',
         borderRadius: 12,
         justifyContent: 'center',
         alignItems: 'center',
@@ -135,8 +134,7 @@ export function Button({
           : t.card,
         borderWidth: primary ? 0 : selected || compact || t.contrast ? 2 : 1.5,
         borderColor: selected ? t.text : t.line,
-        opacity: disabled ? 0.45 : pressed ? 0.65 : 1,
-      })}
+      }}
     >
       {icon}
       <T
@@ -148,10 +146,10 @@ export function Button({
           fontWeight: '700',
         }}
       >
-        {selected ? '✓ ' : ''}
+        {selected && <span aria-hidden="true">✓ </span>}
         {label}
       </T>
-    </Pressable>
+    </button>
   );
 }
 export const styles = StyleSheet.create({
@@ -175,12 +173,5 @@ export const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
     alignItems: 'center',
-  },
-  chip: {
-    paddingHorizontal: 6,
-    paddingVertical: 8,
-    minHeight: 52,
-    minWidth: 52,
-    justifyContent: 'center',
   },
 });

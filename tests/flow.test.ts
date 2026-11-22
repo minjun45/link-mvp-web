@@ -93,6 +93,17 @@ test('08: back from the demo store list returns to entry choices instead of resc
     selectedStoreId: undefined,
   });
 });
+test('discovery announces zero, one and multiple results for the selected discovery mode', () => {
+  for (const demo of [false, true]) {
+    const scan = reduce(menu(), { type: 'DISCOVER', demo });
+    const kind = demo ? '데모 매장' : '매장';
+    expect(reduce(scan, { type: 'FOUND', stores: [] }).message).toBe(`${kind}을 찾지 못했어요.`);
+    expect(reduce(scan, { type: 'FOUND', stores: [stores[0]] }).message)
+      .toBe(`${kind} 1곳을 찾았어요. ${stores[0].name}의 정보를 확인해 주세요.`);
+    expect(reduce(scan, { type: 'FOUND', stores }).message)
+      .toBe(`${kind} ${stores.length}곳을 찾았어요. 매장을 선택해 주세요.`);
+  }
+});
 test('09: store confirmation loads menu; history offers reorder only for that store', () => {
   let s = reduce(menu(), { type: 'CONFIRM_STORE' });
   expect(s.flow).toBe('V5-04');
@@ -237,6 +248,17 @@ test('payment success remains on explicit V5-10 until user opens order status', 
   expect(s.flow).toBe('V5-10');
   expect(reduce(s, { type: 'OPEN_ORDER' }).flow).toBe('V5-12');
 });
+test('a ready order opens pickup once and Back can revisit the status screen', () => {
+  const o = order(cart());
+  const status = reduce({ ...initial, order: o }, { type: 'OPEN_ORDER' });
+  const update = { type: 'ORDER_UPDATED', order: { ...o, status: 'ready' } } as const;
+  const ready = reduce(status, update);
+  expect(ready).toMatchObject({ flow: 'V5-12', message: '', notice: '' });
+  const previous = reduce(ready, { type: 'BACK' });
+  expect(previous.flow).toBe('V5-11');
+  expect(reduce(previous, update)).toEqual(previous);
+  expect(reduce(previous, { type: 'OPEN_ORDER' }).flow).toBe('V5-12');
+});
 test('price changes interrupt payment; cancellation retains cart and uncertain verification does not loop', () => {
   let s = reduce(cart(), { type: 'CHECKOUT', key: 'payment-key' });
   s = reduce(s, {
@@ -315,13 +337,15 @@ test('quantity changes are announced with the right unit; leaving the screen or 
   expect(s.notice).toBe('');
   expect(s.message).toBe('메뉴를 삭제했어요.');
 });
-test('order ready moves V5-11 to V5-12 without a status message that would cut off its title', () => {
+test('order ready signals once and lets the pickup heading announce the transition', () => {
   const o = order(cart());
   let s: State = { ...cart(), flow: 'V5-11', order: { ...o, status: 'preparing' } };
   s = reduce(s, { type: 'ORDER_UPDATED', order: { ...o, status: 'ready' } });
   expect(s.flow).toBe('V5-12');
   expect(s.message).toBe('');
   expect(s.signal).toBe('found');
+  const afterAnnouncement = { ...s, signal: undefined, message: '' };
+  expect(reduce(afterAnnouncement, { type: 'ORDER_UPDATED', order: s.order! })).toEqual(afterAnnouncement);
 });
 test('choosing a category from the category screen opens the menu without a status message over its title', () => {
   const s = reduce({ ...menu(), flow: 'V5-M1' }, { type: 'CATEGORY', value: '커피' });

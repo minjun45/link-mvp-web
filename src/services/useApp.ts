@@ -187,18 +187,23 @@ export function useApp() {
   useEffect(() => {
     if (!s.order || !['V5-10', 'V5-11', 'V5-12'].includes(s.flow)) return;
     let active = true;
-    const poll = () =>
-      api
-        .getOrder(s.settings, s.order!.id)
-        .then(order => {
-          if (active) dispatch({ type: 'ORDER_UPDATED', order });
-        })
-        .catch(() => {});
+    const orderId = s.order.id;
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() {
+      try {
+        const order = await api.getOrder(s.settings, orderId);
+        if (!active) return;
+        dispatch({ type: 'ORDER_UPDATED', order });
+        if (order.status === 'ready') return;
+      } catch {
+        // Keep the current status and retry a failed read.
+      }
+      if (active) timer = setTimeout(poll, 3000);
+    }
     void poll();
-    const timer = setInterval(poll, 3000);
     return () => {
       active = false;
-      clearInterval(timer);
+      clearTimeout(timer);
     };
   }, [s.flow, s.order?.id, s.settings]);
   // Speech is initiated only by explicit listen/preview actions.

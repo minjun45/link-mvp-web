@@ -35,10 +35,21 @@ test('menu search field is named by its purpose and shows its example as a nativ
 
 test('sold-out menu reads its name and 품절 as one disabled button', () => {
   const html = render('V5-05', { category: product('디카페인 커피').category });
-  const row = html.match(/<[^>]*aria-label="디카페인 커피, 품절, 오늘 준비 수량 소진"[^>]*>/)?.[0];
-  expect(row).toBeDefined();
-  expect(row).toContain('role="button"');
-  expect(row).toContain('aria-disabled="true"');
+  const row = html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g)?.find(button => button.includes('디카페인 커피'));
+  expect(row).toMatch(/\sdisabled(?:=|\s|>)/);
+  expect(row).toMatch(/디카페인 커피[\s\S]*오늘 준비 수량 소진[\s\S]*품절/);
+  expect(row).not.toContain('aria-label=');
+});
+
+test('native controls use their implicit tab order and buttons use their implicit role', () => {
+  for (const flow of ['START', 'V5-02s', 'V5-05', 'V5-06', 'SETTINGS'] as const) {
+    const html = render(flow, { productId: product('아메리카노').id });
+    expect(html).not.toMatch(/\srole="button"/);
+    expect(html).not.toMatch(/<(button|a|input)\b[^>]*\stabindex="0"/i);
+    const buttons = html.match(/<button\b[^>]*>/g) ?? [];
+    expect(buttons.length).toBeGreaterThan(0);
+    for (const button of buttons) expect(button).toContain('type="button"');
+  }
 });
 
 test('page heading identifies the store without a redundant step label', () => {
@@ -63,15 +74,6 @@ test('category message is announced once, not repeated as text after the last me
   expect(html.match(/음료 메뉴 2개/g)).toHaveLength(1);
   expect(html).toMatch(/role="status">음료 메뉴 2개</);
   expect(render('V5-05', { query: '라' })).toContain('검색 결과');
-});
-
-test('cart button reads the same words it shows, including how many are in it', () => {
-  expect(render('V5-05')).toContain('aria-label="장바구니 비어 있음"');
-  const cart = [{ id: 'l1', productId: product('아메리카노').id, quantity: 2, options: defaults(product('아메리카노')) }];
-  const html = render('V5-05', { cart });
-  expect(html).not.toContain('aria-label="장바구니 비어 있음"');
-  expect(html).toContain('aria-label="장바구니 2잔, 5,000원, 보기"');
-  expect(html).toContain('>장바구니 2잔<');
 });
 
 test('desserts are counted in 개, drinks in 잔, and a mixed cart in 개', () => {
@@ -104,12 +106,28 @@ test('screen title is a plain h1 without an extra role or a leftover tabindex', 
 
 test('waiting screens announce their title; quantity changes are announced without visible text', () => {
   expect(render('V5-04')).toMatch(/role="status">메뉴를 불러오고 있어요</);
-  expect(render('V5-01', { discovery: 'demo' })).toMatch(/role="status">주변 매장을 찾고 있어요</);
+  expect(render('V5-01', { discovery: 'demo' })).toMatch(/role="status">데모에서는 8초 후 매장 검색 결과가 자동으로 표시돼요\.</);
   // The browser's Bluetooth chooser is on top; the page stays quiet.
   expect(render('V5-01', { discovery: 'ble' })).toMatch(/role="status"><\/div>/);
   const html = render('V5-06', { productId: product('레몬에이드').id, quantity: 3, notice: '3잔' });
   expect(html).toMatch(/role="status">3잔</);
   expect(html.match(/>3잔</g)).toHaveLength(2); // the status region and the stepper only
+});
+
+test('cart button uses its visible quantity, amount and action even when a quote is unavailable', () => {
+  const americano = product('아메리카노');
+  const line = { id: 'l1', productId: americano.id, quantity: 2, options: defaults(americano) };
+  for (const [cart, expected] of [
+    [[], '장바구니 비어 있음 0원 보기'],
+    [[line], '장바구니 2잔 5,000원 보기'],
+    [[{ ...line, productId: 'missing' }], '장바구니 2개 금액 확인 필요 보기'],
+  ] as const) {
+    const html = render('V5-05', { cart: [...cart] });
+    const button = html.match(/<button\b[^>]*class="app-button cart-button"[^>]*>[\s\S]*?<\/button>/)?.[0];
+    expect(button).toBeDefined();
+    expect(button).not.toContain('aria-label=');
+    expect(button?.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).toBe(expected);
+  }
 });
 
 test('menu search accepts both spellings of latte and spaces in a spoken menu name', () => {
@@ -136,7 +154,7 @@ test('info rows, order steps and the order number are real text, not an aria-lab
   ]) {
     expect(html).not.toMatch(/<div(?![^>]*role=)[^>]*aria-label=/);
   }
-  expect(render('V5-03', { selectedStoreId: catalog.stores[0].id })).toMatch(/>주소\n<span[^>]*>/);
+  expect(render('V5-03', { selectedStoreId: catalog.stores[0].id })).toMatch(/<h2\b[^>]*>주소<\/h2><div\b[^>]*>[^<]+<\/div>/);
   expect(render('V5-11', { order: o })).toMatch(/주문 전달<span class="visually-hidden">, 완료<\/span>/);
   expect(render('V5-12', { order: { ...o, status: 'ready' as const } })).toMatch(/주문번호\n<span[^>]*>A-0001<\/span>/);
 });
@@ -162,7 +180,10 @@ test('one-option-at-a-time title uses the right particle', () => {
 });
 
 test('settings button is named by its visible text', () => {
-  expect(render('V5-05')).toContain('aria-label="설정"');
+  const settings = render('V5-05').match(/<button\b[^>]*>[\s\S]*?<\/button>/g)
+    ?.find(button => button.includes('</span>설정<'));
+  expect(settings).toBeDefined();
+  expect(settings).not.toContain('aria-label=');
 });
 
 test('search results are told by the heading the 검색 key moves to, not by a status message', () => {

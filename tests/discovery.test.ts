@@ -56,9 +56,9 @@ test('demo discovery shows its loading screen before returning results exactly o
   const send = vi.fn();
   const choose = vi.fn();
   scan(true, send, async () => catalog.stores, choose);
-  await vi.advanceTimersByTimeAsync(0);
+  await vi.advanceTimersByTimeAsync(7_999);
   expect(send).toHaveBeenCalledExactlyOnceWith({ type: 'STORES', stores: catalog.stores });
-  await vi.advanceTimersByTimeAsync(2_000);
+  await vi.advanceTimersByTimeAsync(1);
   expect(send).toHaveBeenLastCalledWith({ type: 'FOUND', stores: catalog.stores });
   await vi.advanceTimersByTimeAsync(30_000);
   expect(send).toHaveBeenCalledTimes(2);

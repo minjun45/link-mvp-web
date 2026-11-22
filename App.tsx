@@ -1,12 +1,12 @@
 import React, { useContext, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Pressable,
   TextInput,
   useWindowDimensions,
   View,
 } from 'react-native';
 import { useApp } from './src/services/useApp';
+import { DEMO_DISCOVERY_MS } from './src/services/discovery';
 import {
   Button,
   Card,
@@ -81,10 +81,6 @@ export default function App() {
   const { alert, helpCard, dialog } = useAppDialog(theme);
   const entryScreen = ['START', 'BLE_GUIDE', 'V5-01', 'V5-01e', 'V5-02', 'V5-02e', 'V5-02s', 'V5-03', 'V5-04'].includes(s.flow);
   const heading = useRef<HTMLHeadingElement>(null);
-  // The screen (flow:revision) whose title last received focus.
-  const titleScreen = useRef('');
-  const alertScreen = useRef('');
-  const [alertText, setAlertText] = useState('');
   const scroll = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const [hasMore, setHasMore] = useState(false);
@@ -139,7 +135,9 @@ export default function App() {
   const product = s.products.find(x => x.id === s.productId);
   const groupName = wizardGroup?.name || '옵션';
   const title =
-    s.flow === 'V5-M3'
+    s.flow === 'V5-11' && s.order?.status === 'ready'
+      ? titles['V5-12']
+      : s.flow === 'V5-M3'
       ? `${groupName}${objectParticle(groupName)} 골라 주세요`
       : s.flow === 'V5-02'
       ? `매장 ${s.found.length}곳을 찾았어요`
@@ -228,44 +226,20 @@ export default function App() {
     viewport?.addEventListener('resize', settle);
     timer = window.setTimeout(go, 800); // no resize seen (keyboard already closed)
   };
-  // Screens shown only while waiting for a result. A screen reader hears their
-  // title through the status region instead of being moved there, because the
-  // result screen replaces them a moment later and takes focus itself.
-  const waiting = ['BOOT', 'V5-01', 'V5-04', 'V5-09'].includes(s.flow);
-  // Every new screen focuses its title, so it is read first ("화면이 바뀌면
-  // 제목부터 읽힘"). That includes automatic moves such as order ready (V5-12)
-  // and payment results, but not in-place updates or waiting screens.
   useEffect(() => {
-    // The browser owns focus while its Bluetooth device chooser is open, and
-    // the added-item sheet (V5-05c) moves focus to its own title.
     if ((s.flow === 'V5-01' && s.discovery === 'ble') || s.flow === 'V5-05c') return;
 
     scroll.current?.scrollTo({ top: 0 });
-    if (waiting) return;
-    titleScreen.current = `${s.flow}:${s.revision}`;
-    // Wait for the press to finish: the footer button that was just pressed
-    // can stay in place with a new label, and a screen reader would keep its
-    // cursor there.
+    // Entry and discovery use the persistent status region. In the order
+    // flow, focus the new title once the activation that opened it has ended.
+    if (entryScreen || s.flow === 'BOOT' || s.flow === 'V5-09') return;
+    if (s.error) return; // Let the alert finish without a competing focus change.
     const timer = window.setTimeout(() => {
-      const title = heading.current;
-      if (!title) return;
-      const active = document.activeElement as HTMLElement | null;
-      if (active && active !== title) active.blur();
-      focusOnce(title, true);
+      if (document.activeElement !== document.body || document.querySelector('dialog[open]')) return;
+      focusOnce(heading.current, true);
     }, 80);
     return () => window.clearTimeout(timer);
   }, [s.flow, s.revision]);
-  // Errors go to the alert region only when they appear on the current
-  // screen. An error that comes with a new screen is shown under its title:
-  // announcing it while focus moves to that title cuts one of them off.
-  // Runs after the focus effect above, which records titleScreen.
-  useEffect(() => {
-    const screen = `${s.flow}:${s.revision}`;
-    const newScreen = alertScreen.current !== screen;
-    alertScreen.current = screen;
-    const error = s.error === 'CHANGE_STORE' ? '' : s.error;
-    setAlertText(newScreen && titleScreen.current === screen ? '' : error);
-  }, [s.error, s.flow, s.revision]);
   useEffect(() => {
     if (s.error === 'CHANGE_STORE')
       alert(
@@ -318,23 +292,9 @@ export default function App() {
           onSubmitEditing={() => s.query.trim() && showResults(true)}
         />
       </View>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={app.listening ? '듣는 중' : '말하기'}
-        onPress={async () => {
-          if (await app.voiceSearch()) showResults(false);
-        }}
-        style={({ pressed }) => ({
-          minHeight: 48,
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: 6,
-          paddingHorizontal: 10,
-          borderRadius: 12,
-          backgroundColor: '#FEE500',
-          opacity: pressed ? 0.7 : 1,
-        })}
-      >
+      <button type="button" className="app-button voice-button" onClick={async () => {
+        if (await app.voiceSearch()) showResults(false);
+      }}>
         <Icon name="mic" size={20} color="#191919" />
         <T
           style={{
@@ -345,7 +305,7 @@ export default function App() {
         >
           {app.listening ? '듣는 중' : '말하기'}
         </T>
-      </Pressable>
+      </button>
     </View>
   );
   const subtitle = (text: string) => (
@@ -452,6 +412,7 @@ export default function App() {
       </T>
     </Card>
   );
+  let searchStatus = '';
   let body: React.ReactNode;
   let primary: ActionButton | undefined;
   let secondary: ActionButton[] = [];
@@ -606,15 +567,15 @@ export default function App() {
       ];
       break;
     case 'V5-01':
+      if (s.discovery === 'demo')
+        searchStatus = `데모에서는 ${DEMO_DISCOVERY_MS / 1000}초 후 매장 검색 결과가 자동으로 표시돼요.`;
       body = (
         <>
-          {subtitle(s.discovery === 'demo'
-            ? '매장 입구 근처에서 잠시 기다려 주세요. 찾으면 진동으로 알려드려요.'
-            : '브라우저 창에서 매장 기기를 선택해 주세요.')}
+          {subtitle(searchStatus || '브라우저 창에서 매장 기기를 선택해 주세요.')}
           <Card compact>
             <InfoRow
               icon="store"
-              label="블루투스"
+              label={s.discovery === 'demo' ? '매장 검색' : '블루투스'}
               value={s.discovery === 'demo'
                 ? '데모 매장 확인 중'
                 : '주변 기기 확인 중'}
@@ -690,9 +651,7 @@ export default function App() {
       const list = (nearby ? s.found : s.stores).filter(x => x.name.includes(s.query.trim()));
       body = (
         <>
-          {nearby && s.found[0] && subtitle(s.discovery === 'demo'
-            ? '데모 매장을 선택해 주세요.'
-            : `${s.found[0].name}을 찾았어요.`)}
+          {nearby && !s.query.trim() && subtitle(s.message || '매장을 선택해 주세요.')}
           {search('매장 이름 입력', '매장 이름으로 찾기')}
           {s.query.trim()
             ? sectionLabel(`검색 결과 · ${list.length}곳`, 'search-results')
@@ -732,14 +691,16 @@ export default function App() {
       body = store ? (
           <Card compact>
             <InfoRow icon="store" label="매장" value={store.name} />
-            <InfoRow icon="pin" label="주소" value={store.address} />
-            <InfoRow icon="clock" label="영업" value={store.hours} />
+            <InfoRow heading icon="pin" label="주소" value={store.address} />
+            <InfoRow heading icon="clock" label="영업" value={store.hours} />
             <InfoRow
+              heading
               icon="card"
               label="주문"
               value={store.open ? '지금 휴대폰 주문 가능' : '오늘 주문 마감'}
             />
             <InfoRow
+              heading
               icon="clock"
               label="대기"
               value={store.wait ? `앞 주문 ${store.wait.ordersAhead}건 · 약 ${store.wait.minutes}분` : '매장에서 확인해 주세요'}
@@ -823,11 +784,6 @@ export default function App() {
     }
     case 'V5-M1':
     case 'V5-05': {
-      primary = {
-        label: '장바구니 보기',
-        disabled: !s.cart.length,
-        run: () => nav('V5-08'),
-      };
       if (s.flow === 'V5-M1' && !s.query.trim()) {
         body = (
           <>
@@ -970,7 +926,6 @@ export default function App() {
                       description={p.soldOut ? '오늘 준비 수량 소진' : p.description}
                       price={p.soldOut ? undefined : money(p.price)}
                       tag={p.soldOut ? '품절' : undefined}
-                      label={p.soldOut ? `${p.name}, 품절, 오늘 준비 수량 소진` : undefined}
                       disabled={p.soldOut}
                       onPress={() => d({ type: 'SELECT_PRODUCT', id: p.id })}
                     />
@@ -1369,7 +1324,9 @@ export default function App() {
         run: () => d({ type: 'OPEN_ORDER' }),
       };
       break;
-    case 'V5-11':
+    case 'V5-11': {
+      const ready = s.order?.status === 'ready';
+      const currentStep = ready ? 3 : s.order?.status === 'received' ? 1 : 2;
       body = s.order && (
         <>
           {subtitle(`${s.order.snapshot.storeName} · 주문번호`)}
@@ -1385,8 +1342,8 @@ export default function App() {
           <Card compact>
             {['주문 전달', '접수 완료', '준비 중', '픽업 가능'].map(
               (label, i) => {
-                const active = i === (s.order?.status === 'received' ? 1 : 2);
-                const done = i < (s.order?.status === 'received' ? 1 : 2);
+                const active = i === currentStep;
+                const done = i < currentStep;
                 const phase = done ? '완료' : active ? '지금' : '대기';
                 return (
                   <View
@@ -1459,13 +1416,14 @@ export default function App() {
           {s.order.demo && <T kind="small">데모 주문의 준비 상태예요.</T>}
         </>
       );
-      primary = {
+      if (ready) primary = { label: '픽업 정보 보기', run: () => d({ type: 'OPEN_ORDER' }) };
+      secondary = [{
         label: '주문 상태 다시 듣기',
-        neutral: true,
         run: () =>
           app.speak(`${title}. 주문번호 ${s.order?.number || ''}.`),
-      };
+      }];
       break;
+    }
     case 'V5-12':
       body = s.order && (
         <>
@@ -1526,13 +1484,13 @@ export default function App() {
       break;
   }
   const shortTitle = s.flow === 'V5-05' || s.flow === 'V5-06' ? title
-    : s.flow === 'V5-08' ? '장바구니' : s.flow === 'V5-11' ? '주문 준비 중'
+    : s.flow === 'V5-08' ? '장바구니' : s.flow === 'V5-11' ? '주문 현황'
     : topLabels[s.flow]?.replace(/^\d \/ \d\s*/, '') || title;
   const cartScreen = ['V5-05', 'V5-M1'].includes(s.flow);
-  const pinSecondary =
+  const pinSecondary = s.flow === 'V5-11' || (
     height >= 650 &&
     fontScale * theme.scale < 1.5 &&
-    ['START', 'BLE_GUIDE', 'V5-O1', 'V5-O4', 'V5-01e', 'V5-03', 'V5-R1', 'V5-06s', 'V5-12', 'P02-C', 'P02-F'].includes(s.flow);
+    ['START', 'BLE_GUIDE', 'V5-O1', 'V5-O4', 'V5-01e', 'V5-03', 'V5-R1', 'V5-06s', 'V5-12', 'P02-C', 'P02-F'].includes(s.flow));
   const hero =
     s.flow === 'START'
       ? 'store'
@@ -1550,46 +1508,42 @@ export default function App() {
   // Waiting screens do not take focus (see above), so say what is happening.
   // Not while the browser's Bluetooth chooser is open on top of the page.
   const waitingStatus =
-    waiting && s.flow !== 'BOOT' && !(s.flow === 'V5-01' && s.discovery === 'ble')
+    ['V5-04', 'V5-09'].includes(s.flow)
       ? title
       : '';
   return (
     <ThemeContext.Provider value={theme}>
-      <div className={`app-frame${entryScreen ? ' entry-frame' : ''}`} data-flow={s.flow} style={{ backgroundColor: theme.bg, color: theme.text, '--page': theme.bg, '--card': theme.card, '--divider': s.settings.dark ? theme.line : '#DCDDE2', '--muted': theme.muted, '--line': theme.line, '--scale': theme.scale, '--gutter': theme.compact ? '12px' : '20px' } as React.CSSProperties}>
-        <div className="visually-hidden" role="alert">
-          {alertText}
-        </div>
-        <div className="visually-hidden" role="status">
-          {waitingStatus || s.notice || screenMessage}
-        </div>
+      <div className="visually-hidden" role="alert">
+        {s.error !== 'CHANGE_STORE' ? s.error : ''}
+      </div>
+      <div className="visually-hidden" role="status">
+        {searchStatus || waitingStatus || s.notice || screenMessage}
+      </div>
+      {/* On entry screens a fresh frame starts sequential navigation at the top. */}
+      <div key={`${s.flow}:${s.revision}`} className={`app-frame${entryScreen ? ' entry-frame' : ''}`} data-flow={s.flow} style={{ backgroundColor: theme.bg, color: theme.text, '--page': theme.bg, '--card': theme.card, '--divider': s.settings.dark ? theme.line : '#DCDDE2', '--muted': theme.muted, '--line': theme.line, '--scale': theme.scale, '--gutter': theme.compact ? '12px' : '20px' } as React.CSSProperties}>
         <View style={[st.header, { borderBottomWidth: 1.5, borderColor: titleScrolled ? (s.settings.dark ? theme.line : '#E1E2E6') : 'transparent' }]}>
           {!['BOOT', 'START', 'V5-O1'].includes(s.flow) && (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="뒤로"
-              onPress={() => d({ type: 'BACK' })}
-              style={[
-                st.chip,
-                { flexDirection: 'row', alignItems: 'center', gap: 2 },
-              ]}
+            <button
+              type="button"
+              className="app-button header-button"
+              onClick={() => d({ type: 'BACK' })}
             >
               <Icon name="back" size={30} color={theme.text} />
               <T style={{ fontSize: 20 * theme.scale, fontWeight: '700' }}>
                 뒤로
               </T>
-            </Pressable>
+            </button>
           )}
           {/* No room for it between 뒤로 and 설정 when zoomed in or with large text. */}
           <div className="compact-title" aria-hidden="true">{titleScrolled && !theme.compact ? shortTitle : ''}</div>
           {s.flow !== 'SETTINGS' && (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="설정"
-              style={[st.chip, { alignItems: 'center' }]}
-              onPress={() => nav('SETTINGS')}
+            <button
+              type="button"
+              className="app-button header-button"
+              onClick={() => nav('SETTINGS')}
             >
               <T kind="section"><span aria-hidden="true">⚙ </span>설정</T>
-            </Pressable>
+            </button>
           )}
         </View>
         <div className="scroll-area">
@@ -1603,21 +1557,7 @@ export default function App() {
                 />
               )}
               {productHeading && <Photo large />}
-              {/* A plain <h1>: no extra role, and tabindex only while focused.
-                  A new element per screen, so focusing it is always announced,
-                  even when the user's cursor was on the previous title. */}
-              <h1
-                key={`${s.flow}:${s.revision}`}
-                ref={heading}
-                style={{
-                  margin: 0,
-                  fontSize: 26 * theme.scale,
-                  lineHeight: `${36.4 * theme.scale}px`,
-                  fontFamily,
-                  fontWeight: 700,
-                  color: theme.text,
-                }}
-              >
+              <h1 ref={heading} className="section-heading" style={{ fontSize: 26 * theme.scale }}>
                 {title}
               </h1>
               {!!s.error &&
@@ -1634,7 +1574,7 @@ export default function App() {
               {body}
               {/* On the menu, filter messages ("음료 메뉴 2개") are announced by the
                   status region; repeating them under the list read as an extra item. */}
-              {!!screenMessage && s.flow !== 'V5-05' && <T>{screenMessage}</T>}
+              {!!screenMessage && s.flow !== 'V5-05' && s.flow !== 'V5-02' && <T>{screenMessage}</T>}
               {!pinSecondary &&
                 secondary.map((b, i) => (
                   <Button
@@ -1648,32 +1588,25 @@ export default function App() {
           </div>
           {hasMore && <div aria-hidden="true" className="more-hint"><span>아래에 더 있어요</span></div>}
         </div>
-        {(primary || (pinSecondary && secondary.length > 0) || s.settings.staffHelp) && <div className="fixed-footer" data-testid="fixed-footer">
-          {primary &&
-            (cartScreen ? (
-              <CartBar
-                testID="primary-action"
-                quantity={cartCount}
-                unit={cartUnit}
-                total={
-                  cartQuote
-                    ? money(cartQuote.total)
-                    : s.cart.length
-                    ? '금액 확인 필요'
-                    : '0원'
-                }
-                onPress={primary.run}
-                disabled={!!primary.disabled}
-              />
-            ) : (
-              <Button
-                testID="primary-action"
-                primary={!primary.neutral}
-                label={primary.label}
-                onPress={primary.run}
-                disabled={primary.disabled}
-              />
-            ))}
+        {(cartScreen || primary || (pinSecondary && secondary.length > 0) || s.settings.staffHelp) && <div className="fixed-footer" data-testid="fixed-footer">
+          {cartScreen ? (
+            <CartBar
+              testID="primary-action"
+              quantity={cartCount}
+              unit={cartUnit}
+              total={cartQuote ? money(cartQuote.total) : s.cart.length ? '금액 확인 필요' : '0원'}
+              onPress={() => nav('V5-08')}
+              disabled={!s.cart.length}
+            />
+          ) : primary && (
+            <Button
+              testID="primary-action"
+              primary={!primary.neutral}
+              label={primary.label}
+              onPress={primary.run}
+              disabled={primary.disabled}
+            />
+          )}
           {pinSecondary &&
             secondary.map(b => (
               <Button
@@ -1690,8 +1623,8 @@ export default function App() {
             onPress={help}
           />}
         </div>}
-        {dialog}
       </div>
+      {dialog}
     </ThemeContext.Provider>
   );
 }
