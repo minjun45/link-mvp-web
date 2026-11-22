@@ -84,6 +84,19 @@ test('1103: no-store result includes retry and name search and no numbered check
   expect(html).not.toContain('1. 매장 입구');
 });
 
+test('store confirmation renders the four detail headings in order, each followed by its value', () => {
+  const store = catalog.stores[0];
+  const html = render('V5-03', { selectedStoreId: store.id });
+  const rows = Array.from(html.matchAll(/<h2\b[^>]*>([^<]*)<\/h2>\s*<[^>]+>([^<]*)</g),
+    ([, label, value]) => [label, value]);
+  expect(rows).toEqual([
+    ['주소', store.address],
+    ['영업', store.hours],
+    ['주문', '지금 휴대폰 주문 가능'],
+    ['대기', '매장에서 확인해 주세요'],
+  ]);
+});
+
 test('1103: store confirmation displays wait data when provided and never invents a wait estimate', () => {
   const extra = { selectedStoreId: catalog.stores[0].id };
   expect(render('V5-03', extra)).toContain('매장에서 확인해 주세요');

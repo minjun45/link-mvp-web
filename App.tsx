@@ -617,14 +617,16 @@ export default function App() {
       body = store ? (
           <Card compact>
             <InfoRow icon="store" label="매장" value={store.name} />
-            <InfoRow icon="pin" label="주소" value={store.address} />
-            <InfoRow icon="clock" label="영업" value={store.hours} />
+            <InfoRow heading icon="pin" label="주소" value={store.address} />
+            <InfoRow heading icon="clock" label="영업" value={store.hours} />
             <InfoRow
+              heading
               icon="card"
               label="주문"
               value={store.open ? '지금 휴대폰 주문 가능' : '오늘 주문 마감'}
             />
             <InfoRow
+              heading
               icon="clock"
               label="대기"
               value={store.wait ? `앞 주문 ${store.wait.ordersAhead}건 · 약 ${store.wait.minutes}분` : '매장에서 확인해 주세요'}

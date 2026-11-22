@@ -90,19 +90,26 @@ export function InfoRow({
   icon,
   label,
   value,
+  heading = false,
 }: {
   icon: IconName;
   label: string;
   value: string;
+  heading?: boolean;
 }) {
   const theme = useContext(ThemeContext);
+  const labelStyle = { fontSize: 15 * theme.scale, lineHeight: 21 * theme.scale, fontWeight: '500' } as const;
   return (
     <View
       style={styles.infoRow}
     >
       <Icon name={icon} color={theme.text} />
       <View style={styles.copy}>
-        <T kind="small" style={{ fontSize: 15 * theme.scale, lineHeight: 21 * theme.scale, fontWeight: '500' }}>{label}</T>
+        {heading ? (
+          <h2 style={{ ...labelStyle, lineHeight: `${labelStyle.lineHeight}px`, margin: 0, color: theme.muted }}>{label}</h2>
+        ) : (
+          <T kind="small" style={labelStyle}>{label}</T>
+        )}
         <T
           style={{
             fontSize: 20 * theme.scale,
