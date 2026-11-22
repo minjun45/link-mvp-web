@@ -93,6 +93,17 @@ test('08: back from the demo store list returns to entry choices instead of resc
     selectedStoreId: undefined,
   });
 });
+test('discovery announces zero, one and multiple results for the selected discovery mode', () => {
+  for (const demo of [false, true]) {
+    const scan = reduce(menu(), { type: 'DISCOVER', demo });
+    const kind = demo ? '데모 매장' : '매장';
+    expect(reduce(scan, { type: 'FOUND', stores: [] }).message).toBe(`${kind}을 찾지 못했어요.`);
+    expect(reduce(scan, { type: 'FOUND', stores: [stores[0]] }).message)
+      .toBe(`${kind} 1곳을 찾았어요. ${stores[0].name}의 정보를 확인해 주세요.`);
+    expect(reduce(scan, { type: 'FOUND', stores }).message)
+      .toBe(`${kind} ${stores.length}곳을 찾았어요. 매장을 선택해 주세요.`);
+  }
+});
 test('09: store confirmation loads menu; history offers reorder only for that store', () => {
   let s = reduce(menu(), { type: 'CONFIRM_STORE' });
   expect(s.flow).toBe('V5-04');
@@ -236,6 +247,15 @@ test('payment success remains on explicit V5-10 until user opens order status', 
   s = reduce(s, { type: 'ORDER_UPDATED', order: { ...o, status: 'ready' } });
   expect(s.flow).toBe('V5-10');
   expect(reduce(s, { type: 'OPEN_ORDER' }).flow).toBe('V5-12');
+});
+test('a ready order leaves the status screen in place until pickup information is requested', () => {
+  const o = order(cart());
+  const status = reduce({ ...initial, order: o }, { type: 'OPEN_ORDER' });
+  const update = { type: 'ORDER_UPDATED', order: { ...o, status: 'ready' } } as const;
+  const ready = reduce(status, update);
+  expect(ready).toMatchObject({ flow: 'V5-11', revision: status.revision, message: '음료가 준비됐어요. 픽업 정보를 확인해 주세요.' });
+  expect(reduce(ready, update)).toEqual(ready);
+  expect(reduce(ready, { type: 'OPEN_ORDER' }).flow).toBe('V5-12');
 });
 test('price changes interrupt payment; cancellation retains cart and uncertain verification does not loop', () => {
   let s = reduce(cart(), { type: 'CHECKOUT', key: 'payment-key' });

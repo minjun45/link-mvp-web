@@ -3,7 +3,7 @@ import type { Settings, Store } from '../core/types';
 import { getStores } from './api';
 import { chooseBeacon } from '../native/browserDevice';
 
-export const DEMO_DISCOVERY_MS = 2_000;
+export const DEMO_DISCOVERY_MS = 8_000;
 type DiscoveryAction = Extract<Action, { type: 'STORES' | 'FOUND' | 'FAIL' }>;
 type DiscoveryOptions = {
   settings: Settings;

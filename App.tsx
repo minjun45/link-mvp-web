@@ -7,6 +7,7 @@ import {
   View,
 } from 'react-native';
 import { useApp } from './src/services/useApp';
+import { DEMO_DISCOVERY_MS } from './src/services/discovery';
 import {
   Button,
   Card,
@@ -107,7 +108,9 @@ export default function App() {
     s.step
   ];
   const title =
-    s.flow === 'V5-M3'
+    s.flow === 'V5-11' && s.order?.status === 'ready'
+      ? titles['V5-12']
+      : s.flow === 'V5-M3'
       ? `${wizardGroup?.name || '옵션'}을 골라 주세요`
       : s.flow === 'V5-02'
       ? `매장 ${s.found.length}곳을 찾았어요`
@@ -489,15 +492,15 @@ export default function App() {
       ];
       break;
     case 'V5-01':
+      if (s.discovery === 'demo')
+        searchStatus = `데모에서는 ${DEMO_DISCOVERY_MS / 1000}초 후 매장 검색 결과가 자동으로 표시돼요.`;
       body = (
         <>
-          {subtitle(s.discovery === 'demo'
-            ? '매장 입구 근처에서 잠시 기다려 주세요. 찾으면 진동으로 알려드려요.'
-            : '브라우저 창에서 매장 기기를 선택해 주세요.')}
+          {subtitle(searchStatus || '브라우저 창에서 매장 기기를 선택해 주세요.')}
           <Card compact>
             <InfoRow
               icon="store"
-              label="블루투스"
+              label={s.discovery === 'demo' ? '매장 검색' : '블루투스'}
               value={s.discovery === 'demo'
                 ? '데모 매장 확인 중'
                 : '주변 기기 확인 중'}
@@ -575,9 +578,7 @@ export default function App() {
         searchStatus = list.length ? `매장 검색 결과 ${list.length}곳` : '일치하는 매장이 없어요.';
       body = (
         <>
-          {nearby && s.found[0] && subtitle(s.discovery === 'demo'
-            ? '데모 매장을 선택해 주세요.'
-            : `${s.found[0].name}을 찾았어요.`)}
+          {nearby && !s.query.trim() && subtitle(s.message || '매장을 선택해 주세요.')}
           {search('매장 이름으로 찾기')}
           {sectionLabel(nearby && !s.query
             ? `찾은 매장 · ${list.length}곳`
@@ -1237,7 +1238,9 @@ export default function App() {
         run: () => d({ type: 'OPEN_ORDER' }),
       };
       break;
-    case 'V5-11':
+    case 'V5-11': {
+      const ready = s.order?.status === 'ready';
+      const currentStep = ready ? 3 : s.order?.status === 'received' ? 1 : 2;
       body = s.order && (
         <>
           {subtitle(`${s.order.snapshot.storeName} · 주문번호`)}
@@ -1253,8 +1256,8 @@ export default function App() {
           <Card compact>
             {['주문 전달', '접수 완료', '준비 중', '픽업 가능'].map(
               (label, i) => {
-                const active = i === (s.order?.status === 'received' ? 1 : 2);
-                const done = i < (s.order?.status === 'received' ? 1 : 2);
+                const active = i === currentStep;
+                const done = i < currentStep;
                 const phase = done ? '완료' : active ? '지금' : '대기';
                 return (
                   <View
@@ -1325,13 +1328,14 @@ export default function App() {
           {s.order.demo && <T kind="small">데모 주문의 준비 상태예요.</T>}
         </>
       );
-      primary = {
+      if (ready) primary = { label: '픽업 정보 보기', run: () => d({ type: 'OPEN_ORDER' }) };
+      secondary = [{
         label: '주문 상태 다시 듣기',
-        neutral: true,
         run: () =>
           app.speak(`${title}. 주문번호 ${s.order?.number || ''}.`),
-      };
+      }];
       break;
+    }
     case 'V5-12':
       body = s.order && (
         <>
@@ -1394,13 +1398,13 @@ export default function App() {
       break;
   }
   const shortTitle = s.flow === 'V5-05' || s.flow === 'V5-06' ? title
-    : s.flow === 'V5-08' ? '장바구니' : s.flow === 'V5-11' ? '주문 준비 중'
+    : s.flow === 'V5-08' ? '장바구니' : s.flow === 'V5-11' ? '주문 현황'
     : topLabels[s.flow]?.replace(/^\d \/ \d\s*/, '') || title;
   const cartScreen = ['V5-05', 'V5-M1'].includes(s.flow);
-  const pinSecondary =
+  const pinSecondary = s.flow === 'V5-11' || (
     height >= 650 &&
     fontScale * theme.scale < 1.5 &&
-    ['START', 'BLE_GUIDE', 'V5-O1', 'V5-O4', 'V5-01e', 'V5-03', 'V5-R1', 'V5-06s', 'V5-12', 'P02-C', 'P02-F'].includes(s.flow);
+    ['START', 'BLE_GUIDE', 'V5-O1', 'V5-O4', 'V5-01e', 'V5-03', 'V5-R1', 'V5-06s', 'V5-12', 'P02-C', 'P02-F'].includes(s.flow));
   const hero =
     s.flow === 'START'
       ? 'store'
@@ -1477,7 +1481,7 @@ export default function App() {
               {body}
               {/* On the menu, filter messages ("음료 메뉴 2개") are announced by the
                   status region; repeating them under the list read as an extra item. */}
-              {!!screenMessage && s.flow !== 'V5-05' && <T>{screenMessage}</T>}
+              {!!screenMessage && s.flow !== 'V5-05' && s.flow !== 'V5-02' && <T>{screenMessage}</T>}
               {!pinSecondary &&
                 secondary.map((b, i) => (
                   <Button

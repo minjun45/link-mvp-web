@@ -56,7 +56,7 @@ export function staffHelpText(s: State, cartQuote?: Quote): string {
     case 'V5-10':
     case 'V5-11':
     case 'V5-12': {
-      const request = s.flow === 'V5-12'
+      const request = s.flow === 'V5-12' || s.order?.status === 'ready'
         ? '주문한 메뉴를 받는 위치로 안내해 주세요.'
         : '제 주문의 준비 상태를 확인해 주세요.';
       return s.order

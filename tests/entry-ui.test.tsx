@@ -40,11 +40,18 @@ test('Bluetooth guidance explains the browser window before offering to open it'
   expect(html).not.toContain('주변 매장을 찾고 있어요');
 });
 
-test('both discovery modes show the scanner without a second Bluetooth search button or time limit', () => {
+test('only the demo scanner displays and announces its eight-second wait', () => {
+  const notice = '데모에서는 8초 후 매장 검색 결과가 자동으로 표시돼요.';
   for (const discovery of ['ble', 'demo'] as const) {
     const html = render('V5-01', { discovery });
     expect(html).toContain('주변 매장을 찾고 있어요');
     expect(html).toContain('찾기 멈추기');
+    if (discovery === 'demo') {
+      expect(html).toContain(`role="status">${notice}</div>`);
+      expect(html.slice(html.indexOf('class="screen-content"'))).toContain(notice);
+    } else {
+      expect(html).not.toContain(notice);
+    }
     expect(html).not.toContain('블루투스로 매장 찾기');
     expect(html).not.toContain('15초');
   }
@@ -135,6 +142,10 @@ test('footer has no shared replay button; order screens keep their own replay ac
     demo: true,
   };
   expect(render('V5-11', { order })).toContain('주문 상태 다시 듣기');
+  expect(buttonTexts(render('V5-11', { order }))).not.toContain('픽업 정보 보기');
+  const ready = render('V5-11', { order: { ...order, status: 'ready' } });
+  expect(buttonTexts(ready)).toEqual(expect.arrayContaining(['픽업 정보 보기', '주문 상태 다시 듣기']));
+  expect(ready).toContain('aria-label="픽업 가능, 지금"');
   expect(render('V5-12', { order: { ...order, status: 'ready' } })).toContain('주문번호 다시 듣기');
 });
 
