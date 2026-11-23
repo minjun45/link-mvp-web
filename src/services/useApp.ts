@@ -1,17 +1,20 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
-import { initial, reduce, snapshot } from '../core/flow';
-import { sameQuote } from '../core/domain';
-import type { Payment } from '../core/types';
+import { initial, reduce, snapshot, type Action } from '../core/flow';
+import type { State } from '../core/types';
+import { paymentMatchesRequest } from '../core/domain';
+import { isOrder, isPayment } from '../core/savedData';
 import * as Device from '../native/browserDevice';
 import { persist, readSnapshot } from './storage';
 import * as api from './api';
 import { startDiscovery } from './discovery';
+import { advancePayment, paymentResult } from './checkout';
 
 export function useApp() {
   const [s, dispatch] = useReducer(reduce, initial);
   const live = useRef(s);
   live.current = s;
   const [busy, setBusy] = useState(false);
+  const [checkingPayment, setCheckingPayment] = useState(false);
   const [listening, setListening] = useState(false);
   const voiceRequest = useRef<AbortController | null>(null);
   function cancelVoiceSearch() {
@@ -24,6 +27,7 @@ export function useApp() {
   useEffect(() => cancelVoiceSearch, [s.flow, s.revision]);
 
   const completing = useRef(false);
+  const pickingUp = useRef(false);
   const discovery = useRef<{ revision: number; stop: () => void } | undefined>(undefined);
   useEffect(() => {
     let active = true;
@@ -41,14 +45,9 @@ export function useApp() {
         if (active) {
           dispatch({
             type: 'HYDRATE',
+            snapshot: null,
             stores: api.stores,
             products: api.products,
-          });
-          dispatch({
-            type: 'FAIL',
-            flow: 'E04',
-            message:
-              '기기에 저장된 내용을 읽지 못했어요. 저장 공간을 확인해 주세요.',
           });
         }
       });
@@ -59,16 +58,15 @@ export function useApp() {
     };
   }, []);
   useEffect(() => {
-    if (s.flow !== 'BOOT')
+    if (s.flow !== 'BOOT' && s.flow !== 'V5-13' && !s.recoveryRequired)
       persist(snapshot(s)).catch(() =>
         dispatch({
-          type: 'FAIL',
-          flow: 'E04',
-          message:
-            '기기에 주문 내용을 저장하지 못했어요. 저장 공간을 확인해 주세요.',
+          type: 'STORAGE_ERROR',
+          message: '기기에 주문 내용을 저장하지 못했어요. 새로고침 전에 저장 공간을 확인해 주세요.',
         }),
       );
   }, [
+    s.recoveryRequired,
     s.onboarded,
     s.settings,
     s.storeId,
@@ -84,11 +82,17 @@ export function useApp() {
   useEffect(() => {
     let cancelled = false;
     const state = s;
+    const isCurrent = () => !cancelled && live.current.revision === state.revision;
+    const checkPayment = !state.recoveryRequired && (
+      state.flow === 'V5-09' ||
+      (state.flow === 'P02-V' && (!!state.payment || state.retryVerification))
+    );
+    setCheckingPayment(checkPayment);
     const send = (action: Parameters<typeof dispatch>[0]) => {
-      if (!cancelled) dispatch(action);
+      if (isCurrent()) dispatch(action);
     };
     async function run() {
-      if (state.flow === 'START') {
+      if (state.flow === 'START' && !state.order && !state.request && !state.payment && !state.recoveryRequired) {
         try {
           send({ type: 'STORES', stores: await api.getStores(state.settings) });
         } catch (e) {
@@ -107,77 +111,12 @@ export function useApp() {
             message: message(e),
           });
         }
-      } else if (state.flow === 'V5-09' || state.flow === 'P02-V') {
-        let submitted = state.flow === 'P02-V' || !!state.payment;
+      } else if (checkPayment) {
         try {
-          await persist(snapshot(state));
-          if (cancelled) return;
-          let p = state.payment;
-          if (!p && state.request) {
-            const fresh =
-              state.flow === 'V5-09'
-                ? await api.revalidate(state.settings, state.request)
-                : undefined;
-            if (cancelled) return;
-            if (fresh && !sameQuote(fresh, state.request.expected)) {
-              send({
-                type: 'PRICE_CHANGED',
-                quote: fresh,
-                products: await api.getMenu(
-                  state.settings,
-                  state.request.storeId,
-                ),
-              });
-              return;
-            }
-            submitted = true;
-            p = await api.prepare(state.settings, state.request);
-            if (cancelled) return;
-          }
-          if (!p) {
-            send({
-              type: 'FAIL',
-              flow: 'P01-E2',
-              message:
-                '진행 중인 결제 정보가 없어요. 장바구니에서 다시 확인해 주세요.',
-            });
-            return;
-          }
-          if (state.flow === 'V5-09') {
-            send({ type: 'PAYMENT_READY', payment: p });
-            return;
-          }
-          p = await api.getPayment(state.settings, p.id);
-          if (cancelled) return;
-          const order = p.orderId
-            ? await api.getOrder(state.settings, p.orderId)
-            : undefined;
-          send({ type: 'PAYMENT_RESULT', payment: p, order });
-        } catch (e) {
-          if (
-            e instanceof api.ApiError &&
-            e.reason === 'PRICE_CHANGED' &&
-            state.request
-          ) {
-            try {
-              const fresh = await api.revalidate(state.settings, state.request);
-              send({
-                type: 'PRICE_CHANGED',
-                quote: fresh,
-                products: await api.getMenu(
-                  state.settings,
-                  state.request.storeId,
-                ),
-              });
-            } catch (failure) {
-              send({ type: 'FAIL', flow: 'P02-V', message: message(failure) });
-            }
-          } else
-            send({
-              type: 'FAIL',
-              flow: submitted ? 'P02-V' : 'P01-E2',
-              message: message(e),
-            });
+          const result = await advancePayment(state, isCurrent);
+          if (result) send(result);
+        } finally {
+          if (isCurrent()) setCheckingPayment(false);
         }
       }
     }
@@ -195,18 +134,21 @@ export function useApp() {
     }
   }, [s.flow, s.revision]);
   useEffect(() => {
-    if (!s.order || !['V5-10', 'V5-11', 'V5-12'].includes(s.flow)) return;
+    if (!s.order || s.recoveryRequired || !['V5-10', 'V5-11', 'V5-12'].includes(s.flow) ||
+        (s.orderStatusChecked && s.order.status === 'ready')) return;
     let active = true;
-    const orderId = s.order.id;
+    const { id: orderId, paymentId } = s.order;
     let timer: ReturnType<typeof setTimeout>;
     async function poll() {
       try {
         const order = await api.getOrder(s.settings, orderId);
         if (!active) return;
+        if (!isOrder(order) || order.id !== orderId || order.paymentId !== paymentId)
+          throw new Error('주문 정보가 일치하지 않아요.');
         dispatch({ type: 'ORDER_UPDATED', order });
         if (order.status === 'ready') return;
       } catch {
-        // Keep the current status and retry a failed read.
+        if (active) dispatch({ type: 'ORDER_LOOKUP_FAILED', orderId });
       }
       if (active) timer = setTimeout(poll, 3000);
     }
@@ -220,8 +162,12 @@ export function useApp() {
   const speak = (text: string) => Device.speak(text);
   function discover(demo = false) {
     const state = live.current;
-    if (state.request || state.payment) {
+    if (state.recoveryRequired || state.request || state.payment) {
       dispatch({ type: 'NAV', flow: 'P02-V' });
+      return;
+    }
+    if (state.order) {
+      dispatch({ type: 'OPEN_ORDER' });
       return;
     }
     // Ignore a duplicate click until React commits the first transition.
@@ -271,40 +217,80 @@ export function useApp() {
     }
   }
   async function complete(result: 'success' | 'cancel' | 'fail' | 'timeout') {
-    if (completing.current || !live.current.payment) return;
+    const state = live.current;
+    const payment = state.payment;
+    if (completing.current || state.recoveryRequired || state.flow !== 'PAYMENT_EXTERNAL' ||
+        payment?.state !== 'ready' || !paymentMatchesRequest(payment, state.request)) return;
+    const isCurrent = () => live.current.payment?.id === payment.id;
     completing.current = true;
     setBusy(true);
-    const state = live.current;
     try {
       await persist(snapshot(state));
-      const p: Payment = await api.complete(
-        state.settings,
-        state.payment!.id,
-        result,
-      );
-      const order = p.orderId
-        ? await api.getOrder(state.settings, p.orderId)
-        : undefined;
-      dispatch({ type: 'PAYMENT_RESULT', payment: p, order });
+      if (!isCurrent()) return;
+      const response = await api.complete(state.settings, payment.id, result);
+      if (!isPayment(response) || response.id !== payment.id)
+        throw new Error('같은 결제의 결과를 확인하지 못했어요.');
+      const action = await paymentResult(state.settings, response);
+      if (isCurrent()) dispatch(action);
     } catch (e) {
-      dispatch({ type: 'FAIL', flow: 'P02-V', message: message(e) });
+      if (isCurrent()) dispatch({ type: 'FAIL', flow: 'P02-V', message: message(e) });
     } finally {
       completing.current = false;
       setBusy(false);
     }
   }
+  function finishPickup() {
+    const state = live.current;
+    return savePickup(state, pickingUp, setBusy, action => {
+      if (live.current.flow !== state.flow || live.current.order?.id !== state.order?.id) return;
+      dispatch(action);
+      if (action.type === 'PICKUP_COMPLETE') window.speechSynthesis?.cancel();
+    });
+  }
+
   return {
     s,
     dispatch,
-    busy,
+    busy: busy || checkingPayment,
     listening,
     speak,
     discover,
     voiceSearch,
     cancelVoiceSearch,
     complete,
+    finishPickup,
   };
 }
+export async function savePickup(
+  state: State,
+  inFlight: { current: boolean },
+  setBusy: (busy: boolean) => void,
+  dispatch: (action: Action) => void,
+) {
+  if (inFlight.current) return;
+  const action = { type: 'PICKUP_COMPLETE' } as const;
+  const finished = reduce(state, action);
+  if (finished === state) return;
+
+  inFlight.current = true;
+  setBusy(true);
+  try {
+    try {
+      await persist(snapshot(finished));
+    } catch {
+      dispatch({
+        type: 'STORAGE_ERROR',
+        message: '픽업 완료를 저장하지 못했어요. 저장 공간을 확인한 뒤 다시 눌러 주세요.',
+      });
+      return;
+    }
+    dispatch(action);
+  } finally {
+    inFlight.current = false;
+    setBusy(false);
+  }
+}
+
 function message(e: unknown) {
   return e instanceof Error ? e.message : '다시 시도해 주세요.';
 }

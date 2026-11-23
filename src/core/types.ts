@@ -122,6 +122,7 @@ export type Flow =
   | 'V5-10'
   | 'V5-11'
   | 'V5-12'
+  | 'V5-13'
   | 'SETTINGS';
 export type Settings = {
   dark: boolean;
@@ -141,6 +142,7 @@ export type Snapshot = {
   request?: Request;
   payment?: Payment;
   order?: Order;
+  queuedOrders?: Order[];
 };
 export type PreviousScreen = Pick<
   State,
@@ -161,6 +163,10 @@ export type PreviousScreen = Pick<
 >;
 export type State = Snapshot & {
   flow: Flow;
+  recoveryRequired: boolean;
+  storageNotice: string;
+  orderStatusChecked: boolean;
+  retryVerification: boolean;
   backStack: PreviousScreen[];
   stores: Store[];
   found: Store[];

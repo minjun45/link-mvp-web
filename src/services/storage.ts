@@ -1,14 +1,9 @@
 import type { Snapshot } from '../core/types';
 const snapshotKey = 'link-web.state.v1';
 let pending: Promise<unknown> = Promise.resolve();
-export async function readSnapshot(): Promise<Snapshot | undefined> {
+export async function readSnapshot(): Promise<unknown> {
   const text = localStorage.getItem(snapshotKey);
-  if (!text) return;
-  try {
-    return JSON.parse(text);
-  } catch {
-    return;
-  }
+  return text === null ? undefined : JSON.parse(text);
 }
 export function persist(value: Snapshot): Promise<void> {
   const encoded = JSON.stringify(value);

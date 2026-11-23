@@ -66,3 +66,27 @@ test('an idempotency key cannot change an existing basket', async () => {
     prepare(settings, { ...request, items: [{ ...items[0], quantity: 2 }] }),
   ).rejects.toThrow();
 });
+
+test.each(['{', '{"sequence":0,"keys":{},"payments":null,"orders":{}}'])(
+  'a damaged local ledger refuses all payment writes and preserves the original bytes',
+  async corrupted => {
+    const name = 'link-web.ledger.v1';
+    localStorage.setItem(name, corrupted);
+    await expect(prepare(settings, request)).rejects.toThrow('테스트 결제 기록');
+    await expect(complete(settings, 'p1', 'success')).rejects.toThrow('테스트 결제 기록');
+    await expect(getOrder(settings, 'o1')).rejects.toThrow('테스트 결제 기록');
+    expect(localStorage.getItem(name)).toBe(corrupted);
+  },
+);
+
+test('an expired local payment stays terminal when a late completion arrives', async () => {
+  const p = await prepare(settings, request);
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(p.created! + 900_001);
+  try {
+    expect((await getPayment(settings, p.id)).state).toBe('expired');
+    await expect(complete(settings, p.id, 'success')).rejects.toThrow();
+    expect((await prepare(settings, request)).id).toBe(p.id);
+  } finally {
+    clock.mockRestore();
+  }
+});

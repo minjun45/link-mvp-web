@@ -32,6 +32,7 @@ const state: State = {
   products,
   cart,
   flow: 'P02-V',
+  payment: { ...payment, state: 'ready', orderId: undefined },
 };
 test('approval clears the paid basket even if catalog prices have since changed', () => {
   const next = reduce(

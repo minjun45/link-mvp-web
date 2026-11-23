@@ -8,6 +8,7 @@ import type {
   Order,
 } from '../core/types';
 import { quote, key, sameQuote, status } from '../core/domain';
+import { isOrder, isPayment, isRecord, matchesQuoteItems } from '../core/savedData';
 import { serial } from './storage';
 import catalog from '../data/catalog.json';
 export const stores = catalog.stores as Store[];
@@ -19,11 +20,49 @@ type Ledger = {
   orders: Record<string, Order>;
 };
 const ledgerKey = 'link-web.ledger.v1';
-const getLedger = (): Ledger =>
-  JSON.parse(
-    localStorage.getItem(ledgerKey) ||
-      '{"sequence":0,"keys":{},"payments":{},"orders":{}}',
-  );
+function getLedger(): Ledger {
+  const text = localStorage.getItem(ledgerKey);
+  if (text === null) return { sequence: 0, keys: {}, payments: {}, orders: {} };
+
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    // Keep the original storage entry for recovery.
+  }
+  if (isLedger(value)) return value;
+  throw new Error('저장된 테스트 결제 기록을 읽을 수 없어요. 새 결제 전에 기존 주문을 확인해 주세요.');
+}
+
+function isLedger(value: unknown): value is Ledger {
+  if (!isRecord(value) || typeof value.sequence !== 'number' ||
+      !Number.isSafeInteger(value.sequence) || value.sequence < 0 ||
+      !isRecord(value.keys) || !isRecord(value.payments) || !isRecord(value.orders))
+    return false;
+
+  const { keys, payments, orders, sequence } = value;
+  const paymentIds = Object.values(keys);
+  if (paymentIds.length !== Object.keys(payments).length ||
+      new Set(paymentIds).size !== paymentIds.length ||
+      !paymentIds.every(id => typeof id === 'string' && Object.hasOwn(payments, id)))
+    return false;
+
+  const numbers = new Set<string>();
+  return Object.entries(payments).every(([id, payment]) => isPayment(payment) && payment.id === id &&
+      (payment.state !== 'approved' || (!!payment.orderId && Object.hasOwn(orders, payment.orderId)))) &&
+    Object.entries(orders).every(([id, order]) => {
+      if (!isOrder(order) || order.id !== id || numbers.has(order.number)) return false;
+      const number = /^A-(\d+)$/.exec(order.number);
+      if (!number || Number(number[1]) > sequence) return false;
+      numbers.add(order.number);
+      const payment = payments[order.paymentId];
+      return isPayment(payment) && payment.state === 'approved' &&
+        payment.orderId === id && sameQuote(payment.snapshot, order.snapshot);
+    });
+}
+
+const isExpired = (payment: Payment) =>
+  payment.created !== undefined && Date.now() - payment.created > 900_000;
 export class ApiError extends Error {
   constructor(public code: number, message: string, public reason?: string) {
     super(message);
@@ -120,14 +159,16 @@ export async function prepare(s: Settings, r: Request): Promise<Payment> {
     });
   return serial(async () => {
     const l = getLedger();
-    const expected = await revalidate(s, r);
-    const old = l.keys[r.key];
-    if (old) {
-      const p = l.payments[old];
-      if (!sameQuote(p.snapshot, expected))
+    if (Object.hasOwn(l.keys, r.key)) {
+      const p = l.payments[l.keys[r.key]];
+      if (p.snapshot.storeId !== r.storeId || !sameQuote(p.snapshot, r.expected) ||
+          !matchesQuoteItems(r.items, p.snapshot))
         throw new Error('이전 결제 내용을 먼저 확인해 주세요.');
       return p;
     }
+    const expected = await revalidate(s, r);
+    if (!sameQuote(r.expected, expected))
+      throw new ApiError(409, '주문 내용이 바뀌었어요.', 'PRICE_CHANGED');
     const p: Payment = {
       id: key(),
       state: 'ready',
@@ -135,7 +176,7 @@ export async function prepare(s: Settings, r: Request): Promise<Payment> {
       snapshot: expected,
       created: Date.now(),
     };
-    l.keys[r.key] = p.id;
+    l.keys = { ...l.keys, [r.key]: p.id };
     l.payments[p.id] = p;
     localStorage.setItem(ledgerKey, JSON.stringify(l));
     return p;
@@ -145,9 +186,9 @@ export async function getPayment(s: Settings, id: string): Promise<Payment> {
   if (s.mode === 'server') return http(s, `/payments/${id}`);
   return serial(async () => {
     const l = getLedger();
-    const p = l.payments[id];
+    const p = Object.hasOwn(l.payments, id) ? l.payments[id] : undefined;
     if (!p) throw new Error('이 기기의 결제 정보를 찾을 수 없어요.');
-    if (p.state === 'ready' && Date.now() - (p.created || 0) > 900000) {
+    if (p.state === 'ready' && isExpired(p)) {
       p.state = 'expired';
       localStorage.setItem(ledgerKey, JSON.stringify(l));
     }
@@ -163,12 +204,12 @@ export async function complete(
     return http(s, `/payments/${id}/complete`, { result });
   return serial(async () => {
     const l = getLedger();
-    const p = l.payments[id];
+    const p = Object.hasOwn(l.payments, id) ? l.payments[id] : undefined;
     if (!p) throw new Error('결제 정보를 찾지 못했어요.');
     if (p.state === 'approved') return p;
     if (p.state !== 'ready')
       throw new Error('이미 종료된 결제예요. 상태를 다시 확인해 주세요.');
-    if (Date.now() - (p.created || 0) > 900000) {
+    if (isExpired(p)) {
       p.state = 'expired';
     } else if (result === 'success') {
       l.sequence++;
@@ -198,7 +239,7 @@ export async function complete(
 export async function getOrder(s: Settings, id: string): Promise<Order> {
   if (s.mode === 'server') return http(s, `/orders/${id}`);
   const l = getLedger();
-  const o = l.orders[id];
+  const o = Object.hasOwn(l.orders, id) ? l.orders[id] : undefined;
   if (!o) throw new Error('주문을 찾지 못했어요.');
   return { ...o, status: status(o.created) };
 }

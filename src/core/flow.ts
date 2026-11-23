@@ -9,7 +9,8 @@ import type {
   Settings,
   Flow,
 } from './types';
-import { defaults, initialOptions, quote, fromOrder, unit } from './domain';
+import { defaults, initialOptions, quote, fromOrder, unit, sameQuote, paymentMatchesRequest } from './domain';
+import { matchesQuoteItems, restoreSnapshot } from './savedData';
 export const settings: Settings = {
   dark: false,
   contrast: false,
@@ -25,6 +26,10 @@ export const initial: State = {
   cart: [],
   history: {},
   flow: 'BOOT',
+  recoveryRequired: false,
+  storageNotice: '',
+  orderStatusChecked: true,
+  retryVerification: false,
   backStack: [],
   stores: [],
   found: [],
@@ -49,7 +54,7 @@ export const initial: State = {
 export type Action =
   | {
       type: 'HYDRATE';
-      snapshot?: Snapshot;
+      snapshot?: unknown;
       stores: Store[];
       products: Product[];
     }
@@ -82,14 +87,18 @@ export type Action =
   | { type: 'CART_QUANTITY'; id: string; delta: number }
   | { type: 'CHECKOUT'; key: string; reorder?: boolean }
   | { type: 'PRICE_CHANGED'; quote: Quote; products: Product[] }
+  | { type: 'CHECKOUT_REJECTED'; message: string; products?: Product[] }
+  | { type: 'STORAGE_ERROR'; message: string }
   | { type: 'ACCEPT_CHANGED' }
   | { type: 'PAYMENT_READY'; payment: Payment }
-  | { type: 'PAYMENT_RESULT'; payment: Payment; order?: Order }
+  | { type: 'PAYMENT_RESULT'; payment: Payment; order?: Order; error?: string }
   | { type: 'RETRY_PAYMENT' }
   | { type: 'RETRY_CHECKOUT'; key: string }
   | { type: 'ORDER_UPDATED'; order: Order }
+  | { type: 'ORDER_LOOKUP_FAILED'; orderId: string }
   | { type: 'OPEN_ORDER' }
   | { type: 'PICKUP_COMPLETE' }
+  | { type: 'START_NEW_ORDER' }
   | { type: 'SETTINGS'; value: Partial<Settings> }
   | { type: 'START_VOICE_SEARCH' }
   | { type: 'CLEAR_ERROR' };
@@ -120,6 +129,7 @@ const goto = (s: State, flow: Flow): State => ({
   signal: undefined,
   missingGroup: undefined,
   spokenQuery: false,
+  retryVerification: false,
   revision: s.revision + 1,
 });
 const shoppingScreens = new Set<Flow>([
@@ -226,43 +236,53 @@ const backRoutes: Partial<Record<Flow, Flow>> = {
   'V5-06s': 'V5-05',
   'V5-08e': 'V5-08',
   'V5-08': 'V5-05',
-  'V5-09': 'P02-V',
-  PAYMENT_EXTERNAL: 'P02-V',
   'P01-E1': 'V5-08',
   'P01-E2': 'V5-08',
   'P02-C': 'V5-08',
   'P02-F': 'V5-08',
   'P02-T': 'V5-08',
-  'V5-10': 'V5-10',
   'V5-11': 'V5-10',
   'V5-12': 'V5-11',
 };
 export function reduce(s: State, a: Action): State {
   if ('revision' in a && a.revision !== undefined && a.revision !== s.revision) return s;
+  // Only the completion screen's button can leave it during the current visit.
+  if (s.flow === 'V5-13' && a.type !== 'START_NEW_ORDER' && a.type !== 'HYDRATE') return s;
   try {
     switch (a.type) {
+      case 'START_NEW_ORDER':
+        return s.flow === 'V5-13' ? start(s) : s;
       case 'HYDRATE': {
-        // Discard the retired automatic-speech preference from older snapshots.
-        const { voice: _legacyVoice, ...savedSettings } =
-          (a.snapshot?.settings ?? {}) as Partial<Settings> & { voice?: boolean };
-        const next = {
+        const { snapshot: saved, recoveryRequired, storageNotice } = restoreSnapshot(a.snapshot, settings);
+        return {
           ...initial,
-          ...a.snapshot,
-          settings: { ...settings, ...savedSettings },
+          ...saved,
           stores: a.stores,
           products: a.products,
-        };
-        return {
-          ...next,
-          flow:
-            next.request || next.payment
-              ? 'P02-V'
-              : 'START',
+          recoveryRequired,
+          storageNotice,
+          orderStatusChecked: !saved.order,
+          flow: recoveryRequired || saved.request || saved.payment ? 'P02-V' : saved.order ? 'V5-11' : 'START',
         };
       }
       case 'STORES':
         return { ...s, stores: a.stores, discoveryReady: true };
       case 'NAV':
+        if (s.flow === 'V5-09')
+          return a.flow === 'START' || a.flow === 'BLE_GUIDE' ? goto(s, 'P02-V') : s;
+        if (s.flow === 'PAYMENT_EXTERNAL' || s.flow === 'P02-V') {
+          if (a.flow === 'P02-V' && !s.recoveryRequired)
+            return { ...goto(s, 'P02-V'), retryVerification: s.flow === 'P02-V' };
+          if (a.flow === 'PAYMENT_EXTERNAL' && s.flow === 'P02-V' &&
+              !s.recoveryRequired && !s.error && s.payment?.state === 'ready' &&
+              paymentMatchesRequest(s.payment, s.request))
+            return goto(s, 'PAYMENT_EXTERNAL');
+          if (a.flow === 'V5-11' && s.recoveryRequired && s.order)
+            return goto(s, 'V5-11');
+          if (a.flow === 'START' || a.flow === 'BLE_GUIDE') return goto(s, 'P02-V');
+          return s;
+        }
+        if (s.order && ['START', 'BLE_GUIDE'].includes(a.flow)) return reduce(s, { type: 'OPEN_ORDER' });
         // Dismissing the added-item sheet should not reopen it on Back.
         if (s.flow === 'V5-05c' && ['V5-05', 'V5-M1', 'V5-08'].includes(a.flow)) {
           const menuIndex = s.backStack.map(entry => entry.flow).lastIndexOf('V5-05');
@@ -291,14 +311,13 @@ export function reduce(s: State, a: Action): State {
             : s.returnTo,
         };
       case 'BACK':
+        if (['V5-09', 'P02-V', 'V5-10'].includes(s.flow)) return s;
+        if (s.flow === 'PAYMENT_EXTERNAL') return goto(s, 'P02-V');
+        if (s.recoveryRequired && s.flow === 'V5-11') return goto(s, 'P02-V');
         if (s.flow === 'SETTINGS') return s.returnTo === 'START' ? start(s) : goto(s, s.returnTo);
         if (['BLE_GUIDE', 'V5-01', 'V5-01e'].includes(s.flow)) return start(s);
         if (['P01-E2', 'P02-C', 'P02-F', 'P02-T'].includes(s.flow))
-          return {
-            ...goto(s, 'V5-08'),
-            payment: undefined,
-            request: undefined,
-          };
+          return reduce(s, { type: 'RETRY_PAYMENT' });
         if (s.flow === 'V5-M3') {
           if (s.returnReview)
             return goto({ ...s, returnReview: false }, 'V5-M4');
@@ -339,9 +358,11 @@ export function reduce(s: State, a: Action): State {
       case 'ONBOARD_SKIP':
         return { ...start(s), onboarded: true };
       case 'REPLAY_TRAINING':
+        if (s.request || s.payment || s.order || s.recoveryRequired) return s;
         return { ...goto(s, 'V5-O1'), backStack: [] };
       case 'DISCOVER':
-        if (s.request || s.payment) return goto(s, 'P02-V');
+        if (s.request || s.payment || s.recoveryRequired) return goto(s, 'P02-V');
+        if (s.order) return reduce(s, { type: 'OPEN_ORDER' });
         return discover(
           a.demo && s.settings.mode !== 'local'
             ? reduce(s, { type: 'SETTINGS', value: { mode: 'local' } })
@@ -433,7 +454,7 @@ export function reduce(s: State, a: Action): State {
       case 'MORE_STORES':
         return { ...s, storeLimit: s.storeLimit + 3 };
       case 'MORE_MENU':
-        return { ...s, menuLimit: s.menuLimit + 5, error: '' };
+        return { ...s, menuLimit: s.menuLimit + 5, error: '', notice: '' };
       case 'MORE_CATEGORIES':
         return { ...s, categoryLimit: s.categoryLimit + 6 };
       case 'SELECT_PRODUCT': {
@@ -575,12 +596,14 @@ export function reduce(s: State, a: Action): State {
       }
       case 'RETRY_CHECKOUT':
       case 'CHECKOUT': {
+        if (s.recoveryRequired) return goto(s, 'P02-V');
+        if (s.order && !s.request && !s.payment) return reduce(s, { type: 'OPEN_ORDER' });
         if (a.type === 'RETRY_CHECKOUT') {
           const terminal = (s.flow === 'P02-C' && s.payment?.state === 'cancelled') ||
             (s.flow === 'P02-F' && s.payment?.state === 'failed');
-          if (!terminal) return s;
+          if (!terminal || s.order) return s;
         } else if (s.request || s.payment) {
-          return goto(s, 'P02-V');
+          return ['V5-09', 'PAYMENT_EXTERNAL', 'P02-V'].includes(s.flow) ? s : goto(s, 'P02-V');
         }
         const cart = a.type === 'CHECKOUT' && a.reorder ? fromOrder(s.history[s.storeId!]) : s.cart;
         const expected = quote(
@@ -600,6 +623,16 @@ export function reduce(s: State, a: Action): State {
           },
         };
       }
+      case 'STORAGE_ERROR':
+        return { ...s, storageNotice: a.message };
+      case 'CHECKOUT_REJECTED':
+        return {
+          ...goto(s, 'P01-E2'),
+          request: undefined,
+          payment: undefined,
+          products: a.products ?? s.products,
+          error: a.message,
+        };
       case 'PRICE_CHANGED':
         return {
           ...goto(s, 'P01-E1'),
@@ -612,6 +645,7 @@ export function reduce(s: State, a: Action): State {
       case 'ACCEPT_CHANGED':
         return { ...goto(s, 'V5-08'), changed: undefined };
       case 'PAYMENT_READY':
+        if (s.flow !== 'V5-09') return s;
         return {
           ...goto(
             s,
@@ -621,27 +655,22 @@ export function reduce(s: State, a: Action): State {
         };
       case 'PAYMENT_RESULT': {
         const p = a.payment;
-        if (p.state === 'approved' && a.order) {
-          const unchanged =
-            s.storeId === a.order.snapshot.storeId &&
-            s.cart.length === a.order.snapshot.items.length &&
-            s.cart.every((line, index) => {
-              const paid = a.order!.snapshot.items[index];
-              return (
-                line.productId === paid.productId &&
-                line.quantity === paid.quantity &&
-                Object.keys(line.options).length ===
-                  Object.keys(paid.options).length &&
-                Object.entries(line.options).every(
-                  ([id, value]) => paid.options[id] === value,
-                )
-              );
-            });
+        if ((!s.payment && !s.request) || (s.payment && s.payment.id !== p.id) ||
+            (s.payment?.state === 'approved' && p.state !== 'approved'))
+          return s;
+        if (p.state === 'approved' && a.order && a.order.paymentId === p.id &&
+            (!p.orderId || p.orderId === a.order.id) && sameQuote(p.snapshot, a.order.snapshot)) {
+          const unchanged = s.storeId === a.order.snapshot.storeId &&
+            matchesQuoteItems(s.cart, a.order.snapshot);
+          const queued = (s.queuedOrders ?? []).filter(order => order.id !== a.order?.id && order.id !== s.order?.id);
+          if (s.order && s.order.id !== a.order.id) queued.unshift(s.order);
           return {
             ...goto(s, 'V5-10'),
             payment: undefined,
             request: undefined,
             order: a.order,
+            queuedOrders: queued.length ? queued : undefined,
+            orderStatusChecked: true,
             history: { ...s.history, [a.order.snapshot.storeId]: a.order },
             cart: unchanged ? [] : s.cart,
             signal: 'success',
@@ -658,34 +687,45 @@ export function reduce(s: State, a: Action): State {
         return {
           ...(s.flow === flow ? s : goto(s, flow)),
           payment: p,
+          retryVerification: false,
+          error: a.error ?? '',
           message:
             flow === 'P02-V'
               ? '결제 결과를 확인해 주세요. 결과가 확정되기 전에는 새 결제를 만들지 않아요.'
               : '',
         };
       }
-      case 'RETRY_PAYMENT':
-        return { ...goto(s, 'V5-08'), payment: undefined, request: undefined };
+      case 'RETRY_PAYMENT': {
+        if (!['P01-E2', 'P02-C', 'P02-F', 'P02-T'].includes(s.flow) || s.recoveryRequired) return s;
+        const cleared = { ...s, payment: undefined, request: undefined };
+        return s.order ? reduce(cleared, { type: 'OPEN_ORDER' }) : goto(cleared, 'V5-08');
+      }
       case 'OPEN_ORDER':
-        return goto(s, s.order?.status === 'ready' ? 'V5-12' : 'V5-11');
-      case 'PICKUP_COMPLETE':
-        if (s.flow !== 'V5-12') return s;
-        return start({ ...s, order: undefined });
+        if (!s.order || s.request || s.payment || s.recoveryRequired) return s;
+        return goto(s, s.orderStatusChecked && s.order.status === 'ready' ? 'V5-12' : 'V5-11');
+      case 'PICKUP_COMPLETE': {
+        if (s.flow !== 'V5-12' || !s.orderStatusChecked || s.order?.status !== 'ready' || s.recoveryRequired) return s;
+        const [order, ...queued] = s.queuedOrders ?? [];
+        const pickedUp = { ...s, order, orderStatusChecked: !order, storageNotice: '',
+          queuedOrders: queued.length ? queued : undefined };
+        return { ...goto(pickedUp, 'V5-13'), backStack: [] };
+      }
+      case 'ORDER_LOOKUP_FAILED':
+        if (s.flow !== 'V5-11' || s.order?.id !== a.orderId) return s;
+        return { ...s, message: '주문 상태를 확인하지 못했어요. 주문번호는 그대로이며 다시 확인하고 있어요.' };
       case 'ORDER_UPDATED': {
-        const changed = a.order.status !== s.order?.status;
-        if (changed && a.order.status === 'ready' && s.flow === 'V5-11') {
+        if (!s.order || s.order.id !== a.order.id || s.order.paymentId !== a.order.paymentId) return s;
+        const changed = a.order.status !== s.order.status;
+        const order = changed ? { ...s.order, status: a.order.status } : s.order;
+        if (s.flow === 'V5-11' && order.status === 'ready' && (changed || !s.orderStatusChecked)) {
           // The pickup heading announces readiness. Keep the live region quiet.
-          return { ...goto(s, 'V5-12'), order: a.order, signal: 'found' };
+          return { ...goto(s, 'V5-12'), order, orderStatusChecked: true, signal: 'found' };
         }
         return {
           ...s,
-          order: a.order,
-          message:
-            changed
-              ? a.order.status === 'ready'
-                ? '음료가 준비됐어요.'
-                : '주문을 준비하고 있어요.'
-              : s.message,
+          order,
+          orderStatusChecked: true,
+          message: changed ? (order.status === 'ready' ? '음료가 준비됐어요.' : '주문을 준비하고 있어요.') : '',
           signal: changed ? 'found' : s.signal,
         };
       }
@@ -693,8 +733,8 @@ export function reduce(s: State, a: Action): State {
         const connection =
           (a.value.mode && a.value.mode !== s.settings.mode) ||
           (a.value.serverUrl && a.value.serverUrl !== s.settings.serverUrl);
-        if (connection && (s.request || s.payment))
-          return { ...s, error: '진행 중인 결제 결과를 먼저 확인해 주세요.' };
+        if (connection && (s.request || s.payment || s.order || s.recoveryRequired))
+          return { ...s, error: '진행 중인 결제와 주문을 먼저 확인해 주세요.' };
         return {
           ...s,
           settings: { ...s.settings, ...a.value },
@@ -731,5 +771,6 @@ export function snapshot(s: State): Snapshot {
     request: s.request,
     payment: s.payment,
     order: s.order,
+    queuedOrders: s.queuedOrders,
   };
 }

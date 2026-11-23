@@ -1,4 +1,4 @@
-import { money } from '../core/domain';
+import { money, unit } from '../core/domain';
 import type { Quote, State } from '../core/types';
 
 export function staffHelpText(s: State, cartQuote?: Quote): string {
@@ -38,7 +38,11 @@ export function staffHelpText(s: State, cartQuote?: Quote): string {
       if (!s.cart.length) return '장바구니가 비어 있어요. 메뉴를 담을 수 있게 도와주세요.';
       if (!cartQuote) return '담은 메뉴의 옵션과 가격을 다시 확인해 주세요.';
       const lines = cartQuote.items.map(item =>
-        [item.name, ...item.labels, `${item.quantity}개`].join(' · '),
+        [
+          item.name,
+          ...item.labels,
+          `${item.quantity}${unit(s.products, [item.productId])}`,
+        ].join(' · '),
       );
       return [cartQuote.storeName, ...lines, `합계 ${money(cartQuote.total)}입니다. 결제 전에 함께 확인해 주세요.`].join('\n');
     }
@@ -56,7 +60,7 @@ export function staffHelpText(s: State, cartQuote?: Quote): string {
     case 'V5-10':
     case 'V5-11':
     case 'V5-12': {
-      const request = s.flow === 'V5-12' || s.order?.status === 'ready'
+      const request = s.flow === 'V5-12' || (s.orderStatusChecked && s.order?.status === 'ready')
         ? '주문한 메뉴를 받는 위치로 안내해 주세요.'
         : '제 주문의 준비 상태를 확인해 주세요.';
       return s.order
