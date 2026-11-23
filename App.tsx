@@ -38,6 +38,8 @@ type ActionButton = {
   run: () => void;
   disabled?: boolean;
   neutral?: boolean;
+  /** Read by screen readers after the button name. */
+  hint?: string;
 };
 function menuSearchKey(text: string) {
   return text.replace(/\s+/g, '').replace(/라떼/g, '라테');
@@ -85,6 +87,9 @@ export default function App() {
   const content = useRef<HTMLDivElement>(null);
   const [hasMore, setHasMore] = useState(false);
   const [titleScrolled, setTitleScrolled] = useState(false);
+  // What voice search heard, announced once by the status region.
+  const [voiceStatus, setVoiceStatus] = useState('');
+  useEffect(() => setVoiceStatus(''), [s.flow]);
   // The menu group at the top of the list, highlighted in the category bar.
   const [currentGroup, setCurrentGroup] = useState(0);
   // The group the user jumped to, kept highlighted until they scroll away
@@ -293,7 +298,12 @@ export default function App() {
         />
       </View>
       <button type="button" className="app-button voice-button" onClick={async () => {
-        if (await app.voiceSearch()) showResults(false);
+        setVoiceStatus('');
+        const heard = await app.voiceSearch();
+        if (heard) {
+          setVoiceStatus(`‘${heard}’ 검색 결과를 보여 드려요.`);
+          showResults(false);
+        }
       }}>
         <Icon name="mic" size={20} color="#191919" />
         <T
@@ -424,20 +434,30 @@ export default function App() {
       body = (
         <>
           {subtitle('실제 매장을 찾거나 데모로 먼저 체험해 보세요.')}
-          <Card compact>
-            <InfoRow icon="store" label="실제 매장 찾기" value="블루투스로 주변 매장을 찾아요" />
-            <InfoRow icon="cup" label="데모 매장으로 진행하기" value="실제 결제 없이 주문을 체험해요" />
-          </Card>
+          {/* The card repeats the two button names. Screen readers skip it and
+              read each description on its button instead, so a TalkBack user
+              does not stop on text that only looks like a button. */}
+          <div aria-hidden="true">
+            <Card compact>
+              <InfoRow icon="store" label="실제 매장 찾기" value="블루투스로 주변 매장을 찾아요" />
+              <InfoRow icon="cup" label="데모 매장으로 진행하기" value="실제 결제 없이 주문을 체험해요" />
+            </Card>
+          </div>
           {!s.discoveryReady && !s.error && <T kind="small">매장 정보를 확인하고 있어요.</T>}
           {!!s.error && <Button label="매장 정보 다시 불러오기" onPress={() => nav('START')} />}
         </>
       );
       primary = {
         label: '실제 매장 찾기',
+        hint: '블루투스로 주변 매장을 찾아요',
         run: () => nav('BLE_GUIDE'),
         disabled: !s.discoveryReady,
       };
-      secondary = [{ label: '데모 매장으로 진행하기', run: () => app.discover(true) }];
+      secondary = [{
+        label: '데모 매장으로 진행하기',
+        hint: '실제 결제 없이 주문을 체험해요',
+        run: () => app.discover(true),
+      }];
       break;
     case 'BLE_GUIDE':
       body = subtitle('다음 창에서 매장 기기를 선택해 주세요. 웹 주소가 먼저 읽힐 수 있어요.');
@@ -605,7 +625,7 @@ export default function App() {
     case 'V5-02e': {
       body = (
         <>
-          {subtitle('아래 방법을 위에서부터 차례로 해 보세요.')}
+          {subtitle('다음 방법을 차례로 해 보세요.')}
           <NavigationRow
             icon="radar"
             title="다시 찾기"
@@ -1517,7 +1537,10 @@ export default function App() {
         {s.error !== 'CHANGE_STORE' ? s.error : ''}
       </div>
       <div className="visually-hidden" role="status">
-        {searchStatus || waitingStatus || s.notice || screenMessage}
+        {[
+          app.listening ? '듣고 있어요. 찾을 이름을 말해 주세요.' : voiceStatus,
+          searchStatus || waitingStatus || s.notice || screenMessage,
+        ].filter(Boolean).join(' ')}
       </div>
       {/* On entry screens a fresh frame starts sequential navigation at the top. */}
       <div key={`${s.flow}:${s.revision}`} className={`app-frame${entryScreen ? ' entry-frame' : ''}`} data-flow={s.flow} style={{ backgroundColor: theme.bg, color: theme.text, '--page': theme.bg, '--card': theme.card, '--divider': s.settings.dark ? theme.line : '#DCDDE2', '--muted': theme.muted, '--line': theme.line, '--scale': theme.scale, '--gutter': theme.compact ? '12px' : '20px' } as React.CSSProperties}>
@@ -1580,6 +1603,7 @@ export default function App() {
                   <Button
                     key={i}
                     label={b.label}
+                    hint={b.hint}
                     onPress={b.run}
                     disabled={b.disabled}
                   />
@@ -1603,6 +1627,7 @@ export default function App() {
               testID="primary-action"
               primary={!primary.neutral}
               label={primary.label}
+              hint={primary.hint}
               onPress={primary.run}
               disabled={primary.disabled}
             />
@@ -1612,6 +1637,7 @@ export default function App() {
               <Button
                 key={b.label}
                 label={b.label}
+                hint={b.hint}
                 onPress={b.run}
                 disabled={b.disabled}
               />
