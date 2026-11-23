@@ -65,7 +65,7 @@ export type Action =
   | { type: 'SELECT_STORE'; id: string }
   | { type: 'CONFIRM_STORE'; clear?: boolean }
   | { type: 'MENU_LOADED'; products: Product[] }
-  | { type: 'QUERY'; value: string }
+  | { type: 'QUERY'; value: string; spoken?: boolean; revision?: number }
   | { type: 'CATEGORY'; value: string }
   | { type: 'MORE_STORES' }
   | { type: 'MORE_MENU' }
@@ -91,6 +91,7 @@ export type Action =
   | { type: 'OPEN_ORDER' }
   | { type: 'PICKUP_COMPLETE' }
   | { type: 'SETTINGS'; value: Partial<Settings> }
+  | { type: 'START_VOICE_SEARCH' }
   | { type: 'CLEAR_ERROR' };
 const entryMenu = (products: Product[]): Flow =>
   products.length > 20 ? 'V5-M1' : 'V5-05';
@@ -118,6 +119,7 @@ const goto = (s: State, flow: Flow): State => ({
   notice: '',
   signal: undefined,
   missingGroup: undefined,
+  spokenQuery: false,
   revision: s.revision + 1,
 });
 const shoppingScreens = new Set<Flow>([
@@ -395,13 +397,18 @@ export function reduce(s: State, a: Action): State {
           products: a.products,
           category: a.products[0]?.category || '',
         };
+      case 'START_VOICE_SEARCH':
+        return { ...s, spokenQuery: false, error: '', message: '', notice: '' };
       case 'QUERY':
         return {
           ...s,
           query: a.value,
+          spokenQuery: !!a.spoken,
           // A message about the previous list (e.g. a sold-out item) no
           // longer applies to the new results.
           error: '',
+          message: '',
+          notice: '',
           storeLimit: 3,
           menuLimit: 5,
           flow: s.flow === 'V5-05c' ? 'V5-05' : s.flow,

@@ -87,9 +87,6 @@ export default function App() {
   const content = useRef<HTMLDivElement>(null);
   const [hasMore, setHasMore] = useState(false);
   const [titleScrolled, setTitleScrolled] = useState(false);
-  // What voice search heard, announced once by the status region.
-  const [voiceStatus, setVoiceStatus] = useState('');
-  useEffect(() => setVoiceStatus(''), [s.flow]);
   // The menu group at the top of the list, highlighted in the category bar.
   const [currentGroup, setCurrentGroup] = useState(0);
   // The group the user jumped to, kept highlighted until they scroll away
@@ -202,29 +199,30 @@ export default function App() {
     setCurrentGroup(index);
     focusOnce(section.querySelector('h2'), true);
   };
-  // After a search (the keyboard's 검색 key, or voice search), close the
+  // On submission, focus the result text so the screen reader announces it once.
+  useEffect(() => {
+    if (s.spokenQuery) focusOnce(scroll.current?.querySelector('#search-results'));
+  }, [s.spokenQuery, s.query]);
+  // After the keyboard's 검색 key, close the
   // keyboard and move to the results heading ("검색 결과 · 2개") or the "no
   // results" line. A status message here was held back while typing and then
   // cut off when VoiceOver read the search field again.
   // With the keyboard open, wait until it has finished closing: on iPhone,
   // VoiceOver goes back to the search field at that moment, which undid a
   // move made earlier. The visible area stops resizing once it is closed.
-  const showResults = (keyboard: boolean) => {
+  const showKeyboardResults = () => {
+    const frame = scroll.current;
     (document.activeElement as HTMLElement | null)?.blur();
     const viewport = window.visualViewport;
     let timer = 0;
     const go = () => {
       viewport?.removeEventListener('resize', settle);
-      focusOnce(document.getElementById('search-results'));
+      if (frame?.isConnected) focusOnce(frame.querySelector('#search-results'));
     };
     const settle = () => {
       window.clearTimeout(timer);
       timer = window.setTimeout(go, 200);
     };
-    if (!keyboard) {
-      timer = window.setTimeout(go, 100);
-      return;
-    }
     viewport?.addEventListener('resize', settle);
     timer = window.setTimeout(go, 800); // no resize seen (keyboard already closed)
   };
@@ -278,7 +276,10 @@ export default function App() {
             an example, which screen readers read as the field's hint. */}
         <TextInput
           value={s.query}
-          onChangeText={value => d({ type: 'QUERY', value })}
+          onChangeText={value => {
+            app.cancelVoiceSearch();
+            d({ type: 'QUERY', value });
+          }}
           accessibilityLabel={label}
           placeholder={placeholder}
           placeholderTextColor={theme.muted}
@@ -291,17 +292,10 @@ export default function App() {
             minHeight: 48,
           }}
           returnKeyType="search"
-          onSubmitEditing={() => s.query.trim() && showResults(true)}
+          onSubmitEditing={() => s.query.trim() && showKeyboardResults()}
         />
       </View>
-      <button type="button" className="app-button voice-button" onClick={async () => {
-        setVoiceStatus('');
-        const heard = await app.voiceSearch();
-        if (heard) {
-          setVoiceStatus(`‘${heard}’ 검색 결과를 보여 드려요.`);
-          showResults(false);
-        }
-      }}>
+      <button type="button" className="app-button voice-button" onClick={app.voiceSearch}>
         <Icon name="mic" size={20} color="#191919" />
         <T
           style={{
@@ -419,6 +413,7 @@ export default function App() {
       </T>
     </Card>
   );
+  const voicePrefix = s.spokenQuery ? `‘${s.query}’ ` : '';
   let searchStatus = '';
   let body: React.ReactNode;
   let primary: ActionButton | undefined;
@@ -671,7 +666,7 @@ export default function App() {
           {nearby && !s.query.trim() && subtitle(s.message || '매장을 선택해 주세요.')}
           {search('매장 이름 입력', '매장 이름으로 찾기')}
           {s.query.trim()
-            ? sectionLabel(`검색 결과 · ${list.length}곳`, 'search-results')
+            ? sectionLabel(`${voicePrefix}검색 결과 · ${list.length}곳`, 'search-results')
             : sectionLabel(nearby ? `찾은 매장 · ${list.length}곳` : `참여 매장 · ${list.length}곳`)}
           {list.slice(0, s.storeLimit).map(x => (
             <NavigationRow
@@ -932,7 +927,7 @@ export default function App() {
             return (
               <section className="menu-group" key={group} data-group={query ? undefined : categories.indexOf(group)}>
                 {query
-                  ? sectionLabel(`${group} · ${groupItems.length}개`, 'search-results')
+                  ? sectionLabel(`${voicePrefix}${group} · ${groupItems.length}개`, 'search-results')
                   : sectionLabel(`${group} · ${groupItems.length}개`)}
                 <div className="menu-items">
                   {visible.map(p => (
@@ -953,7 +948,7 @@ export default function App() {
           })}
           {!items.length && (
             <T nativeID={query ? 'search-results' : undefined}>
-              일치하는 메뉴가 없어요. 다른 이름으로 찾아 주세요.
+              {voicePrefix && `${voicePrefix}검색 결과 · 0개. `}일치하는 메뉴가 없어요. 다른 이름으로 찾아 주세요.
             </T>
           )}
           {!groupedMenu && items.length > s.menuLimit && (
@@ -1534,10 +1529,7 @@ export default function App() {
         {s.error !== 'CHANGE_STORE' ? s.error : ''}
       </div>
       <div className="visually-hidden" role="status">
-        {[
-          app.listening ? '듣고 있어요. 찾을 이름을 말해 주세요.' : voiceStatus,
-          searchStatus || waitingStatus || s.notice || screenMessage,
-        ].filter(Boolean).join(' ')}
+        {app.listening ? '듣고 있어요. 찾을 이름을 말해 주세요.' : searchStatus || waitingStatus || s.notice || screenMessage}
       </div>
       {/* On entry screens a fresh frame starts sequential navigation at the top. */}
       <div key={`${s.flow}:${s.revision}`} className={`app-frame${entryScreen ? ' entry-frame' : ''}`} data-flow={s.flow} style={{ backgroundColor: theme.bg, color: theme.text, '--page': theme.bg, '--card': theme.card, '--divider': s.settings.dark ? theme.line : '#DCDDE2', '--muted': theme.muted, '--line': theme.line, '--scale': theme.scale, '--gutter': theme.compact ? '12px' : '20px' } as React.CSSProperties}>
