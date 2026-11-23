@@ -233,7 +233,7 @@ test('pickup confirmation has a single heading and native action with large text
   const html = render('V5-13', { settings: { ...initial.settings, staffHelp: true, large: true, contrast: true } });
   expect(html).toMatch(/<h1[^>]*>픽업을 완료했어요<\/h1>/);
   expect(html.match(/픽업을 완료했어요/g)).toHaveLength(1);
-  expect(html.match(/주문이 완료로 표시됐어요\./g)).toHaveLength(1);
+  expect(html.match(/이용해 주셔서 감사합니다\./g)).toHaveLength(1);
   expect(html).toContain('role="status"></div>');
   expect(html).toMatch(/<button type="button"[^>]*data-testid="primary-action"[^>]*>[\s\S]*?새 주문 시작하기/);
   expect(html).not.toMatch(/>뒤로<\/|직원 도움|주문번호|다시 듣기/);

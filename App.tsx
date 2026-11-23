@@ -1556,7 +1556,7 @@ export default function App() {
       ];
       break;
     case 'V5-13':
-      body = subtitle('주문이 완료로 표시됐어요.');
+      body = subtitle('이용해 주셔서 감사합니다.');
       primary = { label: '새 주문 시작하기', run: () => d({ type: 'START_NEW_ORDER' }) };
       break;
     case 'SETTINGS':
