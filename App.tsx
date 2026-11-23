@@ -173,10 +173,7 @@ export default function App() {
   } catch (e) {
     cartError = e instanceof Error ? e.message : '';
   }
-  const help = () => {
-    const message = staffHelpText(s, cartQuote);
-    helpCard(message, () => app.speak(message));
-  };
+  const help = () => helpCard(staffHelpText(s, cartQuote));
   const nav = (flow: typeof s.flow) => d({ type: 'NAV', flow });
   const menu = () => nav(s.products.length > 20 ? 'V5-M1' : 'V5-05');
   const checkout = (reorder = false) =>
