@@ -13,6 +13,16 @@ export function useApp() {
   live.current = s;
   const [busy, setBusy] = useState(false);
   const [listening, setListening] = useState(false);
+  const voiceRequest = useRef<AbortController | null>(null);
+  function cancelVoiceSearch() {
+    const request = voiceRequest.current;
+    if (!request) return;
+    voiceRequest.current = null;
+    setListening(false);
+    request.abort();
+  }
+  useEffect(() => cancelVoiceSearch, [s.flow, s.revision]);
+
   const completing = useRef(false);
   const discovery = useRef<{ revision: number; stop: () => void } | undefined>(undefined);
   useEffect(() => {
@@ -228,30 +238,36 @@ export function useApp() {
     });
     discovery.current = { revision: next.revision, stop };
   }
-  /** Resolves true when the recognized words were put in the search field. */
   async function voiceSearch() {
-    if (listening) return false;
+    if (voiceRequest.current) return;
+    const request = new AbortController();
+    voiceRequest.current = request;
+    const { flow, revision } = live.current;
+    const isCurrent = () => !request.signal.aborted &&
+      live.current.flow === flow && live.current.revision === revision;
     // Clear an earlier message so the same one is announced again.
-    dispatch({ type: 'CLEAR_ERROR' });
+    dispatch({ type: 'START_VOICE_SEARCH' });
     setListening(true);
-    Device.signal('listen');
     try {
-      const text = (await Device.recognize()).trim();
+      Device.signal('listen');
+      const text = (await Device.recognize(request.signal)).trim();
+      if (!isCurrent()) return;
       if (text) {
-        dispatch({ type: 'QUERY', value: text });
-        return true;
+        dispatch({ type: 'QUERY', value: text, spoken: true, revision });
+        return;
       }
       dispatch({
         type: 'FAIL',
-        flow: live.current.flow,
+        flow, revision,
         message: '말씀을 듣지 못했어요. 말하기를 다시 눌러 주세요.',
       });
-      return false;
     } catch (e) {
-      dispatch({ type: 'FAIL', flow: live.current.flow, message: message(e) });
-      return false;
+      if (isCurrent()) dispatch({ type: 'FAIL', flow, revision, message: message(e) });
     } finally {
-      setListening(false);
+      if (voiceRequest.current === request) {
+        voiceRequest.current = null;
+        setListening(false);
+      }
     }
   }
   async function complete(result: 'success' | 'cancel' | 'fail' | 'timeout') {
@@ -285,6 +301,7 @@ export function useApp() {
     speak,
     discover,
     voiceSearch,
+    cancelVoiceSearch,
     complete,
   };
 }

@@ -5,6 +5,7 @@ type BluetoothChooser = {
 type SpeechRecognition = {
   lang: string;
   start(): void;
+  abort(): void;
   onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
   onerror: ((event: { error: string }) => void) | null;
   onend: (() => void) | null;
@@ -91,13 +92,16 @@ export function speak(text: string) {
   window.speechSynthesis.speak(speech);
 }
 
-export async function recognize(): Promise<string> {
+export async function recognize(signal: AbortSignal): Promise<string> {
+  if (signal.aborted) return '';
   const browser = window as SpeechBrowser;
   const Recognition = browser.SpeechRecognition || browser.webkitSpeechRecognition;
   if (!Recognition)
     throw new Error('이 브라우저는 음성 검색을 지원하지 않아요. 검색어를 입력해 주세요.');
-  return new Promise((resolve, reject) => {
-    const recognition = new Recognition();
+  const recognition = new Recognition();
+  const abort = () => recognition.abort();
+  signal.addEventListener('abort', abort, { once: true });
+  return new Promise<string>((resolve, reject) => {
     recognition.lang = 'ko-KR';
     recognition.onresult = event => resolve(event.results[0]?.[0]?.transcript || '');
     recognition.onend = () => resolve('');
@@ -106,7 +110,7 @@ export async function recognize(): Promise<string> {
       else reject(new Error('음성 검색을 할 수 없어요. 마이크 권한을 확인하거나 검색어를 입력해 주세요.'));
     };
     recognition.start();
-  });
+  }).finally(() => signal.removeEventListener('abort', abort));
 }
 
 export function openPayment(url: string, base: string) {

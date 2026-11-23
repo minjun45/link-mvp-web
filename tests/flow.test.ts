@@ -354,6 +354,19 @@ test('choosing a category from the category screen opens the menu without a stat
   const inPlace = reduce(menu(), { type: 'CATEGORY', value: '커피' });
   expect(inPlace.message).toMatch(/^커피 메뉴 \d+개$/);
 });
+test('voice search replaces the discovery announcement and ignores late results after navigation', () => {
+  const list = { ...menu(), flow: 'V5-02' as const, message: '데모 매장 3곳을 찾았어요.' };
+  const listening = reduce(list, { type: 'START_VOICE_SEARCH' });
+  expect(listening.message).toBe('');
+  const result = { type: 'QUERY', value: '없는매장', spoken: true, revision: list.revision } as const;
+  const found = reduce(listening, result);
+  expect(found).toMatchObject({ query: '없는매장', spokenQuery: true, message: '' });
+  expect(reduce(found, { type: 'QUERY', value: 'KAIST' }).spokenQuery).toBe(false);
+
+  const settings = reduce(listening, { type: 'NAV', flow: 'SETTINGS' });
+  expect(reduce(settings, result)).toBe(settings);
+  expect(reduce(settings, { type: 'FAIL', flow: list.flow, message: 'late', revision: list.revision })).toBe(settings);
+});
 test('the sold-out message goes away once the list changes', () => {
   const m = menu();
   const soldOut = m.products.find(p => p.soldOut)!;

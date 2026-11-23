@@ -195,6 +195,13 @@ test('search results are told by the heading the 검색 key moves to, not by a s
   expect(render('V5-02', { query: '링크', found: catalog.stores })).toMatch(/<h2 id="search-results"[^>]*>검색 결과 · \d+곳<\/h2>/);
 });
 
+test('voice results announce the transcript and matching count together', () => {
+  const stores = render('V5-02', { query: '없는매장', spokenQuery: true, found: catalog.stores });
+  expect(stores).toMatch(/id="search-results"[^>]*>‘없는매장’ 검색 결과 · 0곳</);
+  expect(stores).toContain('role="status"></div>');
+  expect(render('V5-05', { query: '라떼', spokenQuery: true })).toContain('‘라떼’ 검색 결과 · 2개');
+  expect(render('V5-05', { query: '없는메뉴', spokenQuery: true })).toContain('‘없는메뉴’ 검색 결과 · 0개');
+});
 test('category bar of the grouped menu is a set of jump buttons, the group in view marked as current', () => {
   const html = render('V5-05');
   expect(html).toMatch(/role="navigation" aria-label="메뉴 분류"|aria-label="메뉴 분류"[^>]*role="navigation"/);

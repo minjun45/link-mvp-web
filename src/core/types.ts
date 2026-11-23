@@ -171,6 +171,7 @@ export type State = Snapshot & {
   quantity: number;
   editId?: string;
   query: string;
+  spokenQuery?: boolean;
   category: string;
   storeLimit: number;
   menuLimit: number;

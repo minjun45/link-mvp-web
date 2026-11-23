@@ -28,12 +28,15 @@ export function useAppDialog(theme: Theme) {
     setMessage({ title, text, choices, onCancel });
   }
 
-  function helpCard(text: string, read: () => void) {
+  // No "안내 듣기" button: the browser's own voice talked over TalkBack and
+  // VoiceOver. Screen reader users hear the card from its title down, and
+  // staff read the large text on screen.
+  function helpCard(text: string) {
     setMessage({
       title: '주변 사람에게 도움 요청',
       text,
       large: true,
-      choices: [{ text: '안내 듣기', onPress: read, keepOpen: true }, { text: '닫기' }],
+      choices: [{ text: '닫기' }],
     });
   }
 
