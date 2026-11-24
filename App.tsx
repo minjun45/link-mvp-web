@@ -50,6 +50,16 @@ function objectParticle(word: string) {
   return code >= 0 && code < 11172 && code % 28 !== 0 ? '을' : '를';
 }
 
+// Remount on each edit so only a result that stays current for 500 ms is read.
+function TypedSearchNotice({ message }: { message: string }) {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setReady(true), 500);
+    return () => window.clearTimeout(timer);
+  }, []);
+  return ready ? message : null;
+}
+
 export default function App() {
   const app = useApp();
   const { s, dispatch: d } = app;
@@ -82,11 +92,18 @@ export default function App() {
   };
   const { alert, helpCard, dialog } = useAppDialog(theme);
   const entryScreen = ['START', 'BLE_GUIDE', 'V5-01', 'V5-01e', 'V5-02', 'V5-02e', 'V5-02s', 'V5-03', 'V5-04'].includes(s.flow);
+  const screenKey = `${s.flow}:${s.revision}`;
+  const [typingScreen, setTypingScreen] = useState('');
+  const composingInput = useRef<EventTarget | null>(null);
+  const pendingResultFocus = useRef<AbortController | null>(null);
+  useEffect(() => () => {
+    pendingResultFocus.current?.abort();
+    composingInput.current = null;
+  }, [screenKey]);
   const heading = useRef<HTMLHeadingElement>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const moreMenuFocus = useRef<number | null>(null);
-  const cancelKeyboardResults = useRef<(() => void) | undefined>(undefined);
   const [hasMore, setHasMore] = useState(false);
   const [titleScrolled, setTitleScrolled] = useState(false);
   // The menu group at the top of the list, highlighted in the category bar.
@@ -213,32 +230,35 @@ export default function App() {
   // VoiceOver goes back to the search field at that moment, which undid a
   // move made earlier. The visible area stops resizing once it is closed.
   const showKeyboardResults = () => {
-    cancelKeyboardResults.current?.();
+    pendingResultFocus.current?.abort();
     const frame = scroll.current;
-    const input = document.activeElement as HTMLElement | null;
-    input?.blur();
+    (document.activeElement as HTMLElement | null)?.blur();
     const viewport = window.visualViewport;
+    const controller = new AbortController();
+    pendingResultFocus.current = controller;
+    const cancel = () => controller.abort();
+    const options = { capture: true, signal: controller.signal };
     let timer = 0;
-    const stop = () => {
+    controller.signal.addEventListener('abort', () => {
       window.clearTimeout(timer);
-      viewport?.removeEventListener('resize', settle);
-      cancelKeyboardResults.current = undefined;
-    };
+      pendingResultFocus.current = null;
+    }, { once: true });
     const go = () => {
-      stop();
-      if (frame?.isConnected &&
-          (document.activeElement === document.body || document.activeElement === input))
+      cancel();
+      if (frame?.isConnected && document.activeElement === document.body)
         focusOnce(frame.querySelector('#search-results'));
     };
     const settle = () => {
       window.clearTimeout(timer);
       timer = window.setTimeout(go, 200);
     };
-    cancelKeyboardResults.current = stop;
-    viewport?.addEventListener('resize', settle);
+    // A new interaction takes precedence even when it leaves focus on the body.
+    for (const event of ['keydown', 'pointerdown', 'click', 'focusin'])
+      document.addEventListener(event, cancel, options);
+    window.addEventListener('blur', cancel, { signal: controller.signal });
+    viewport?.addEventListener('resize', settle, { signal: controller.signal });
     timer = window.setTimeout(go, 800); // no resize seen (keyboard already closed)
   };
-  useEffect(() => () => cancelKeyboardResults.current?.(), [s.flow, s.revision]);
 
   useEffect(() => {
     const from = moreMenuFocus.current;
@@ -294,14 +314,33 @@ export default function App() {
       ]}
     >
       <Icon name="search" size={26} color={theme.text} />
-      <View style={{ flex: 1, minWidth: 0, justifyContent: 'center' }}>
+      <div
+        style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}
+        onCompositionStart={event => {
+          pendingResultFocus.current?.abort();
+          composingInput.current = event.target;
+          setTypingScreen('');
+        }}
+        onCompositionEnd={event => {
+          composingInput.current = null;
+          if (document.activeElement === event.target) setTypingScreen(screenKey);
+        }}
+        onInput={event => {
+          const composing = (event.nativeEvent as InputEvent).isComposing || composingInput.current === event.target;
+          setTypingScreen(composing ? '' : screenKey);
+        }}
+        onBlur={() => {
+          composingInput.current = null;
+          setTypingScreen('');
+        }}
+      >
         {/* The name says what the field is for; the native placeholder gives
             an example, which screen readers read as the field's hint. */}
         <TextInput
           value={s.query}
           onChangeText={value => {
             app.cancelVoiceSearch();
-            cancelKeyboardResults.current?.();
+            pendingResultFocus.current?.abort();
             d({ type: 'QUERY', value });
           }}
           accessibilityLabel={label}
@@ -316,11 +355,15 @@ export default function App() {
             minHeight: 48,
           }}
           returnKeyType="search"
-          onSubmitEditing={() => s.query.trim() && showKeyboardResults()}
+          onSubmitEditing={() => {
+            setTypingScreen('');
+            if (s.query.trim()) showKeyboardResults();
+          }}
         />
-      </View>
+      </div>
       <button type="button" className="app-button voice-button" onClick={() => {
-        cancelKeyboardResults.current?.();
+        pendingResultFocus.current?.abort();
+        setTypingScreen('');
         if (app.listening) app.cancelVoiceSearch();
         else void app.voiceSearch();
       }}>
@@ -443,6 +486,7 @@ export default function App() {
   );
   const voicePrefix = s.spokenQuery ? `‘${s.query}’ ` : '';
   let searchStatus = '';
+  let typedResultMessage = '';
   let body: React.ReactNode;
   let primary: ActionButton | undefined;
   let secondary: ActionButton[] = [];
@@ -490,7 +534,12 @@ export default function App() {
       }];
       break;
     case 'BLE_GUIDE':
-      body = subtitle('다음 창에서 매장 기기를 선택해 주세요. 웹 주소가 먼저 읽힐 수 있어요.');
+      body = (
+        <>
+          {subtitle('‘기기 선택 창 열기’를 누른 뒤, 목록에서 방문한 매장의 기기를 선택해 주세요. 다음 화면에서 매장 이름과 주소를 확인할 수 있어요.')}
+          {subtitle('어떤 기기를 골라야 할지 모르겠다면 창을 닫고 ‘매장 이름으로 찾기’를 눌러 주세요.')}
+        </>
+      );
       primary = {
         label: '기기 선택 창 열기',
         run: () => app.discover(false),
@@ -549,7 +598,7 @@ export default function App() {
             <InfoRow
               icon="staff"
               label="직원 도움"
-              value="설정에서 ‘직원에게 보여주기’를 켜면 사용할 수 있어요"
+              value="접근성 설정에서 ‘직원에게 보여주기’를 켜면 사용할 수 있어요"
             />
           </Card>
         </>
@@ -599,7 +648,7 @@ export default function App() {
             <InfoRow
               icon="staff"
               label="나중에 또 배우려면"
-              value="설정 › 사용법 다시 듣기"
+              value="접근성 설정 › 사용법 다시 듣기"
             />
           </Card>
         </>
@@ -699,6 +748,7 @@ export default function App() {
     case 'V5-02s': {
       const nearby = s.flow === 'V5-02';
       const list = (nearby ? s.found : s.stores).filter(x => x.name.includes(s.query.trim()));
+      if (s.query.trim()) typedResultMessage = list.length ? `매장 검색 결과 ${list.length}곳` : '검색 결과가 없어요.';
       body = (
         <>
           {nearby && !s.query.trim() && subtitle(s.message || '매장을 선택해 주세요.')}
@@ -871,6 +921,7 @@ export default function App() {
         .sort(
           (a, b) => Number(Boolean(b.popular)) - Number(Boolean(a.popular)),
         );
+      if (query) typedResultMessage = items.length ? `메뉴 검색 결과 ${items.length}개` : '검색 결과가 없어요.';
       const last = s.history[s.storeId!];
       const recent = recentOrderProducts(last, s.products);
       const additional = Math.min(5, items.length - s.menuLimit);
@@ -1604,16 +1655,21 @@ export default function App() {
     (s.flow === 'V5-12' && app.busy);
   const showStaffHelp = s.settings.staffHelp && s.flow !== 'V5-13';
   const alertText = s.error === 'CHANGE_STORE' ? '' : s.error || s.storageNotice;
+  const statusMessage = app.listening
+    ? '듣고 있어요. 찾을 이름을 말해 주세요.'
+    : searchStatus || waitingStatus || s.notice || screenMessage;
   return (
     <ThemeContext.Provider value={theme}>
       <div className="visually-hidden" role="alert">
         {alertText}
       </div>
       <div className="visually-hidden" role="status">
-        {app.listening ? '듣고 있어요. 찾을 이름을 말해 주세요.' : searchStatus || waitingStatus || s.notice || screenMessage}
+        {statusMessage || (typingScreen === screenKey && !s.error && !s.spokenQuery && typedResultMessage &&
+          <TypedSearchNotice key={JSON.stringify([screenKey, s.query, typedResultMessage])} message={typedResultMessage} />
+        )}
       </div>
       {/* On entry screens a fresh frame starts sequential navigation at the top. */}
-      <div key={`${s.flow}:${s.revision}`} className={`app-frame${entryScreen ? ' entry-frame' : ''}`} data-flow={s.flow} style={{ backgroundColor: theme.bg, color: theme.text, '--page': theme.bg, '--card': theme.card, '--divider': s.settings.dark ? theme.line : '#DCDDE2', '--muted': theme.muted, '--line': theme.line, '--scale': theme.scale, '--gutter': theme.compact ? '12px' : '20px' } as React.CSSProperties}>
+      <div key={screenKey} className={`app-frame${entryScreen ? ' entry-frame' : ''}`} data-flow={s.flow} style={{ backgroundColor: theme.bg, color: theme.text, '--page': theme.bg, '--card': theme.card, '--divider': s.settings.dark ? theme.line : '#DCDDE2', '--muted': theme.muted, '--line': theme.line, '--scale': theme.scale, '--gutter': theme.compact ? '12px' : '20px' } as React.CSSProperties}>
         <View style={[st.header, { borderBottomWidth: 1.5, borderColor: titleScrolled ? (s.settings.dark ? theme.line : '#E1E2E6') : 'transparent' }]}>
           {!hideBack && (
             <button
@@ -1627,7 +1683,7 @@ export default function App() {
               </T>
             </button>
           )}
-          {/* No room for it between 뒤로 and 설정 when zoomed in or with large text. */}
+          {/* Leave room for the navigation buttons when zoomed in or using large text. */}
           <div className="compact-title" aria-hidden="true">{titleScrolled && !theme.compact ? shortTitle : ''}</div>
           {!hideSettings && (
             <button
@@ -1635,7 +1691,7 @@ export default function App() {
               className="app-button header-button"
               onClick={() => nav('SETTINGS')}
             >
-              <T kind="section"><span aria-hidden="true">⚙ </span>설정</T>
+              <T kind="section"><span aria-hidden="true">⚙ </span>{titles.SETTINGS}</T>
             </button>
           )}
         </View>

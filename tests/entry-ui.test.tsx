@@ -35,7 +35,9 @@ test('entry screen offers real discovery and demo as separate actions', () => {
 
 test('Bluetooth guidance explains the browser window before offering to open it', () => {
   const html = render('BLE_GUIDE');
-  expect(html).toContain('다음 창에서 매장 기기를 선택해 주세요. 웹 주소가 먼저 읽힐 수 있어요.');
+  expect(html).toContain('방문한 매장의 기기를 선택해 주세요');
+  expect(html).toContain('다음 화면에서 매장 이름과 주소를 확인할 수 있어요');
+  expect(html).toContain('창을 닫고 ‘매장 이름으로 찾기’');
   expect(buttonTexts(html)).toEqual(expect.arrayContaining(['기기 선택 창 열기', '매장 이름으로 찾기']));
   expect(html).not.toContain('주변 매장을 찾고 있어요');
 });
@@ -57,8 +59,19 @@ test('only the demo scanner displays and announces its eight-second wait', () =>
   }
 });
 
+test('reopened store search keeps its results without replaying a typed announcement', () => {
+  const query = '카페';
+  const html = render('V5-02s', { query });
+  const count = catalog.stores.filter(store => store.name.includes(query)).length;
+  expect(count).toBeGreaterThan(0);
+  expect(html).toMatch(new RegExp('<h2 id="search-results"[^>]*>검색 결과 · ' + count + '곳<\\/h2>'));
+  expect(html).toContain('role="status"></div>');
+  expect(html).toMatch(/<span aria-hidden="true">⚙ <\/span>접근성 설정/);
+});
+
 test('settings keeps user preferences and navigation without automatic speech or developer tools', () => {
   const html = render('SETTINGS');
+  expect(html).toMatch(/<h1\b[^>]*>접근성 설정<\/h1>/);
   for (const label of ['큰 글씨', '고대비', '어두운 화면', '기본 옵션 빠르게 담기'])
     expect(html).toContain(`aria-label="${label}"`);
   expect(buttonTexts(html)).toEqual(expect.arrayContaining(['사용법 다시 듣기', '매장 찾기 방식 선택']));

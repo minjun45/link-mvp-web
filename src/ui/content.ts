@@ -41,7 +41,7 @@ export const titles: Record<Flow, string> = {
   'V5-11': '주문을 준비하고 있어요',
   'V5-12': '음료가 준비됐어요',
   'V5-13': '픽업을 완료했어요',
-  SETTINGS: '설정',
+  SETTINGS: '접근성 설정',
 };
 
 export const topLabels: Partial<Record<Flow, string>> = {

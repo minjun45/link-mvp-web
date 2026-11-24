@@ -181,7 +181,7 @@ test('one-option-at-a-time title uses the right particle', () => {
 
 test('settings button is named by its visible text', () => {
   const settings = render('V5-05').match(/<button\b[^>]*>[\s\S]*?<\/button>/g)
-    ?.find(button => button.includes('</span>설정<'));
+    ?.find(button => button.includes('</span>접근성 설정<'));
   expect(settings).toBeDefined();
   expect(settings).not.toContain('aria-label=');
 });
@@ -256,11 +256,22 @@ test('menu pagination names the actual remaining count', () => {
   expect(render('V5-05', { products: results, query: '라떼', menuLimit: 10 })).not.toContain('더 보기');
 });
 
+test('typed menu results restored by navigation do not repeat the spoken announcement', () => {
+  const spoken = render('V5-05', { query: '라떼', spokenQuery: true });
+  expect(spoken).toMatch(/<h2 id="search-results"[^>]*>‘라떼’ 검색 결과 · 2개<\/h2>/);
+  expect(spoken).toContain('role="status"></div>');
+  const restored = render('V5-05', { query: '라떼', spokenQuery: false });
+  expect(restored).toMatch(/<h2 id="search-results"[^>]*>검색 결과 · 2개<\/h2>/);
+  expect(restored).toContain('role="status"></div>');
+  expect(restored).not.toContain('‘라떼’ 검색 결과');
+});
+
 test('listening offers an explicit voice cancellation and one status announcement', () => {
   mock.listening = true;
   try {
-    const html = render('V5-05');
+    const html = render('V5-05', { query: '라떼' });
     expect(html).toContain('음성 검색 취소');
+    expect(html).toContain('role="status">듣고 있어요. 찾을 이름을 말해 주세요.</div>');
     expect(html.match(/듣고 있어요\. 찾을 이름을 말해 주세요\./g)).toHaveLength(1);
   } finally {
     mock.listening = false;
