@@ -95,6 +95,8 @@ export default function App() {
   const screenKey = `${s.flow}:${s.revision}`;
   const [typingScreen, setTypingScreen] = useState('');
   const composingInput = useRef<EventTarget | null>(null);
+  const pendingResultFocus = useRef<AbortController | null>(null);
+  useEffect(() => () => pendingResultFocus.current?.abort(), [screenKey]);
   const heading = useRef<HTMLHeadingElement>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -224,19 +226,33 @@ export default function App() {
   // VoiceOver goes back to the search field at that moment, which undid a
   // move made earlier. The visible area stops resizing once it is closed.
   const showKeyboardResults = () => {
+    pendingResultFocus.current?.abort();
     const frame = scroll.current;
     (document.activeElement as HTMLElement | null)?.blur();
     const viewport = window.visualViewport;
+    const controller = new AbortController();
+    pendingResultFocus.current = controller;
+    const cancel = () => controller.abort();
+    const options = { capture: true, signal: controller.signal };
     let timer = 0;
+    controller.signal.addEventListener('abort', () => {
+      window.clearTimeout(timer);
+      pendingResultFocus.current = null;
+    }, { once: true });
     const go = () => {
-      viewport?.removeEventListener('resize', settle);
-      if (frame?.isConnected) focusOnce(frame.querySelector('#search-results'));
+      cancel();
+      if (frame?.isConnected && document.activeElement === document.body)
+        focusOnce(frame.querySelector('#search-results'));
     };
     const settle = () => {
       window.clearTimeout(timer);
       timer = window.setTimeout(go, 200);
     };
-    viewport?.addEventListener('resize', settle);
+    // A new interaction takes precedence even when it leaves focus on the body.
+    for (const event of ['keydown', 'pointerdown', 'click', 'focusin'])
+      document.addEventListener(event, cancel, options);
+    window.addEventListener('blur', cancel, { signal: controller.signal });
+    viewport?.addEventListener('resize', settle, { signal: controller.signal });
     timer = window.setTimeout(go, 800); // no resize seen (keyboard already closed)
   };
   useEffect(() => {
