@@ -181,7 +181,7 @@ test('one-option-at-a-time title uses the right particle', () => {
 
 test('settings button is named by its visible text', () => {
   const settings = render('V5-05').match(/<button\b[^>]*>[\s\S]*?<\/button>/g)
-    ?.find(button => button.includes('</span>설정<'));
+    ?.find(button => button.includes('</span>접근성 설정<'));
   expect(settings).toBeDefined();
   expect(settings).not.toContain('aria-label=');
 });
