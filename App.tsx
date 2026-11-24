@@ -50,6 +50,16 @@ function objectParticle(word: string) {
   return code >= 0 && code < 11172 && code % 28 !== 0 ? '을' : '를';
 }
 
+// Remount on each edit so only a result that stays current for 500 ms is read.
+function TypedSearchNotice({ message }: { message: string }) {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setReady(true), 500);
+    return () => window.clearTimeout(timer);
+  }, []);
+  return ready ? message : null;
+}
+
 export default function App() {
   const app = useApp();
   const { s, dispatch: d } = app;
@@ -82,6 +92,9 @@ export default function App() {
   };
   const { alert, helpCard, dialog } = useAppDialog(theme);
   const entryScreen = ['START', 'BLE_GUIDE', 'V5-01', 'V5-01e', 'V5-02', 'V5-02e', 'V5-02s', 'V5-03', 'V5-04'].includes(s.flow);
+  const screenKey = `${s.flow}:${s.revision}`;
+  const [typingScreen, setTypingScreen] = useState('');
+  const composingInput = useRef<EventTarget | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -271,7 +284,25 @@ export default function App() {
       ]}
     >
       <Icon name="search" size={26} color={theme.text} />
-      <View style={{ flex: 1, minWidth: 0, justifyContent: 'center' }}>
+      <div
+        style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}
+        onCompositionStart={event => {
+          composingInput.current = event.target;
+          setTypingScreen('');
+        }}
+        onCompositionEnd={event => {
+          composingInput.current = null;
+          if (document.activeElement === event.target) setTypingScreen(screenKey);
+        }}
+        onInput={event => {
+          const composing = (event.nativeEvent as InputEvent).isComposing || composingInput.current === event.target;
+          setTypingScreen(composing ? '' : screenKey);
+        }}
+        onBlur={() => {
+          composingInput.current = null;
+          setTypingScreen('');
+        }}
+      >
         {/* The name says what the field is for; the native placeholder gives
             an example, which screen readers read as the field's hint. */}
         <TextInput
@@ -292,10 +323,16 @@ export default function App() {
             minHeight: 48,
           }}
           returnKeyType="search"
-          onSubmitEditing={() => s.query.trim() && showKeyboardResults()}
+          onSubmitEditing={() => {
+            setTypingScreen('');
+            if (s.query.trim()) showKeyboardResults();
+          }}
         />
-      </View>
-      <button type="button" className="app-button voice-button" onClick={app.voiceSearch}>
+      </div>
+      <button type="button" className="app-button voice-button" onClick={() => {
+        setTypingScreen('');
+        void app.voiceSearch();
+      }}>
         <Icon name="mic" size={20} color="#191919" />
         <T
           style={{
@@ -415,6 +452,7 @@ export default function App() {
   );
   const voicePrefix = s.spokenQuery ? `‘${s.query}’ ` : '';
   let searchStatus = '';
+  let typedResultMessage = '';
   let body: React.ReactNode;
   let primary: ActionButton | undefined;
   let secondary: ActionButton[] = [];
@@ -661,6 +699,7 @@ export default function App() {
     case 'V5-02s': {
       const nearby = s.flow === 'V5-02';
       const list = (nearby ? s.found : s.stores).filter(x => x.name.includes(s.query.trim()));
+      if (s.query.trim()) typedResultMessage = list.length ? `매장 검색 결과 ${list.length}곳` : '검색 결과가 없어요.';
       body = (
         <>
           {nearby && !s.query.trim() && subtitle(s.message || '매장을 선택해 주세요.')}
@@ -833,6 +872,7 @@ export default function App() {
         .sort(
           (a, b) => Number(Boolean(b.popular)) - Number(Boolean(a.popular)),
         );
+      if (query) typedResultMessage = items.length ? `메뉴 검색 결과 ${items.length}개` : '검색 결과가 없어요.';
       const last = s.history[s.storeId!];
       const recent = frequent(last, s.products);
       body = (
@@ -1523,16 +1563,19 @@ export default function App() {
     ['V5-04', 'V5-09'].includes(s.flow)
       ? title
       : '';
+  const statusMessage = app.listening ? '듣고 있어요. 찾을 이름을 말해 주세요.' : searchStatus || waitingStatus || s.notice || screenMessage;
   return (
     <ThemeContext.Provider value={theme}>
       <div className="visually-hidden" role="alert">
         {s.error !== 'CHANGE_STORE' ? s.error : ''}
       </div>
       <div className="visually-hidden" role="status">
-        {app.listening ? '듣고 있어요. 찾을 이름을 말해 주세요.' : searchStatus || waitingStatus || s.notice || screenMessage}
+        {statusMessage || (typingScreen === screenKey && !s.error && !s.spokenQuery && typedResultMessage &&
+          <TypedSearchNotice key={JSON.stringify([screenKey, s.query, typedResultMessage])} message={typedResultMessage} />
+        )}
       </div>
       {/* On entry screens a fresh frame starts sequential navigation at the top. */}
-      <div key={`${s.flow}:${s.revision}`} className={`app-frame${entryScreen ? ' entry-frame' : ''}`} data-flow={s.flow} style={{ backgroundColor: theme.bg, color: theme.text, '--page': theme.bg, '--card': theme.card, '--divider': s.settings.dark ? theme.line : '#DCDDE2', '--muted': theme.muted, '--line': theme.line, '--scale': theme.scale, '--gutter': theme.compact ? '12px' : '20px' } as React.CSSProperties}>
+      <div key={screenKey} className={`app-frame${entryScreen ? ' entry-frame' : ''}`} data-flow={s.flow} style={{ backgroundColor: theme.bg, color: theme.text, '--page': theme.bg, '--card': theme.card, '--divider': s.settings.dark ? theme.line : '#DCDDE2', '--muted': theme.muted, '--line': theme.line, '--scale': theme.scale, '--gutter': theme.compact ? '12px' : '20px' } as React.CSSProperties}>
         <View style={[st.header, { borderBottomWidth: 1.5, borderColor: titleScrolled ? (s.settings.dark ? theme.line : '#E1E2E6') : 'transparent' }]}>
           {!['BOOT', 'START', 'V5-O1'].includes(s.flow) && (
             <button
