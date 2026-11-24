@@ -490,7 +490,12 @@ export default function App() {
       }];
       break;
     case 'BLE_GUIDE':
-      body = subtitle('다음 창에서 매장 기기를 선택해 주세요. 웹 주소가 먼저 읽힐 수 있어요.');
+      body = (
+        <>
+          {subtitle('‘기기 선택 창 열기’를 누른 뒤, 목록에서 방문한 매장의 기기를 선택해 주세요. 다음 화면에서 매장 이름과 주소를 확인할 수 있어요.')}
+          {subtitle('어떤 기기를 골라야 할지 모르겠다면 창을 닫고 ‘매장 이름으로 찾기’를 눌러 주세요.')}
+        </>
+      );
       primary = {
         label: '기기 선택 창 열기',
         run: () => app.discover(false),
@@ -549,7 +554,7 @@ export default function App() {
             <InfoRow
               icon="staff"
               label="직원 도움"
-              value="설정에서 ‘직원에게 보여주기’를 켜면 사용할 수 있어요"
+              value="접근성 설정에서 ‘직원에게 보여주기’를 켜면 사용할 수 있어요"
             />
           </Card>
         </>
@@ -599,7 +604,7 @@ export default function App() {
             <InfoRow
               icon="staff"
               label="나중에 또 배우려면"
-              value="설정 › 사용법 다시 듣기"
+              value="접근성 설정 › 사용법 다시 듣기"
             />
           </Card>
         </>
@@ -1589,7 +1594,7 @@ export default function App() {
               </T>
             </button>
           )}
-          {/* No room for it between 뒤로 and 설정 when zoomed in or with large text. */}
+          {/* Leave room for the navigation buttons when zoomed in or using large text. */}
           <div className="compact-title" aria-hidden="true">{titleScrolled && !theme.compact ? shortTitle : ''}</div>
           {s.flow !== 'SETTINGS' && (
             <button
@@ -1597,7 +1602,7 @@ export default function App() {
               className="app-button header-button"
               onClick={() => nav('SETTINGS')}
             >
-              <T kind="section"><span aria-hidden="true">⚙ </span>설정</T>
+              <T kind="section"><span aria-hidden="true">⚙ </span>{titles.SETTINGS}</T>
             </button>
           )}
         </View>
