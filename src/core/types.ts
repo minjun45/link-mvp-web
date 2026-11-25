@@ -49,7 +49,20 @@ export type Quote = {
   total: number;
   quantity: number;
 };
+export const KAKAO_TEST_ORIGIN = 'http://127.0.0.1:3000';
+export const KAKAO_TEST_PROVIDER = 'kakaopay-test';
+export function isQaOrigin(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 120 &&
+    /^https:\/\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.vercel\.app$/.test(value) &&
+    value !== 'https://link-mvp-web.vercel.app';
+}
+export type Connection =
+  | { mode: 'local' }
+  | { mode: 'server'; serverUrl: string }
+  | { mode: typeof KAKAO_TEST_PROVIDER; serverUrl: string };
+
 export type Payment = {
+  connection?: Connection;
   id: string;
   state:
     | 'ready'
@@ -64,9 +77,11 @@ export type Payment = {
   snapshot: Quote;
   orderId?: string;
   redirect?: string;
+  checkoutAvailable?: { pc: boolean; mobile: boolean };
   created?: number;
 };
 export type Order = {
+  connection?: Connection;
   id: string;
   paymentId: string;
   number: string;
@@ -76,6 +91,7 @@ export type Order = {
   demo: boolean;
 };
 export type Request = {
+  connection?: Connection;
   key: string;
   storeId: string;
   items: Line[];
@@ -130,9 +146,7 @@ export type Settings = {
   staffHelp: boolean;
   large: boolean;
   quickOptions: boolean;
-  mode: 'local' | 'server';
-  serverUrl: string;
-};
+} & ({ mode: 'local'; serverUrl: string } | { mode: 'server'; serverUrl: string });
 export type Snapshot = {
   onboarded: boolean;
   settings: Settings;
@@ -163,6 +177,8 @@ export type PreviousScreen = Pick<
 >;
 export type State = Snapshot & {
   flow: Flow;
+  kakaoTest: boolean;
+  kakaoOrigin?: string;
   recoveryRequired: boolean;
   storageNotice: string;
   orderStatusChecked: boolean;

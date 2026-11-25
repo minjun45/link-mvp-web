@@ -1,5 +1,5 @@
 import type {
-  Settings,
+  Connection,
   Store,
   Product,
   Quote,
@@ -7,6 +7,7 @@ import type {
   Payment,
   Order,
 } from '../core/types';
+import { KAKAO_TEST_ORIGIN, KAKAO_TEST_PROVIDER, isQaOrigin } from '../core/types';
 import { quote, key, sameQuote, status } from '../core/domain';
 import { isOrder, isPayment, isRecord, matchesQuoteItems } from '../core/savedData';
 import { serial } from './storage';
@@ -96,8 +97,31 @@ export function validateServer(value: string) {
     );
   return value.trim().replace(/\/$/, '');
 }
-async function http<T>(s: Settings, path: string, data?: unknown): Promise<T> {
-  const base = validateServer(s.serverUrl);
+export function kakaoPageOrigin() {
+  const origin = globalThis.location?.origin;
+  const qa = globalThis.document?.querySelector('meta[name="link-kakaopay-qa"]')?.getAttribute('content');
+  if (isQaOrigin(qa) && origin === qa) return qa;
+  if (origin === KAKAO_TEST_ORIGIN &&
+      globalThis.document?.querySelector('meta[name="link-kakaopay-test"]')?.getAttribute('content') === 'enabled') return origin;
+}
+
+async function http<T>(s: Exclude<Connection, { mode: 'local' }>, path: string, data?: unknown): Promise<T> {
+  const kakao = s.mode === KAKAO_TEST_PROVIDER;
+  if (kakao && (globalThis.location?.origin !== s.serverUrl ||
+      (s.serverUrl !== KAKAO_TEST_ORIGIN && kakaoPageOrigin() !== s.serverUrl)))
+    throw new Error('카카오페이 테스트 결제는 주문을 시작한 LINK 주소에서 다시 확인해 주세요.');
+  const base = kakao ? s.serverUrl : validateServer(s.serverUrl);
+  const headers: Record<string, string> = {};
+  if (kakao) headers['X-Link-Kakao-Test'] = '1';
+  if (data !== undefined) {
+    headers['Content-Type'] = 'application/json';
+    if (kakao) {
+      const config = await http<{ kakaopayTest: boolean; csrf: string }>(s, '/config');
+      if (config.kakaopayTest !== true || !/^[a-f0-9]{64}$/.test(config.csrf))
+        throw new Error('카카오페이 테스트 서버 설정을 확인해 주세요.');
+      headers['X-Link-CSRF'] = config.csrf;
+    }
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25000);
   try {
@@ -105,7 +129,8 @@ async function http<T>(s: Settings, path: string, data?: unknown): Promise<T> {
       method: data === undefined ? 'GET' : 'POST',
       credentials: 'include',
       signal: controller.signal,
-      headers: data === undefined ? undefined : { 'Content-Type': 'application/json' },
+      headers,
+      ...(kakao ? { redirect: 'error' as const, mode: 'cors' as const, cache: 'no-store' as const } : {}),
       body: data === undefined ? undefined : JSON.stringify(data),
     });
     const body = await r.json();
@@ -125,12 +150,12 @@ async function http<T>(s: Settings, path: string, data?: unknown): Promise<T> {
     clearTimeout(timer);
   }
 }
-export async function getStores(s: Settings) {
+export async function getStores(s: Connection) {
   if (s.mode === 'local') return stores;
   await http(s, '/config');
   return (await http<{ stores: Store[] }>(s, '/stores')).stores;
 }
-export async function getMenu(s: Settings, id: string) {
+export async function getMenu(s: Connection, id: string) {
   if (s.mode === 'local') {
     if (!stores.find(x => x.id === id)?.open)
       throw new ApiError(409, '지금은 주문할 수 없어요.');
@@ -140,7 +165,7 @@ export async function getMenu(s: Settings, id: string) {
     await http<{ menu: Product[] }>(s, `/stores/${encodeURIComponent(id)}/menu`)
   ).menu;
 }
-export async function revalidate(s: Settings, r: Request): Promise<Quote> {
+export async function revalidate(s: Connection, r: Request): Promise<Quote> {
   if (s.mode === 'local')
     return quote(
       stores.find(x => x.id === r.storeId),
@@ -149,8 +174,8 @@ export async function revalidate(s: Settings, r: Request): Promise<Quote> {
     );
   return http(s, '/quote', { storeId: r.storeId, items: r.items });
 }
-export async function prepare(s: Settings, r: Request): Promise<Payment> {
-  if (s.mode === 'server')
+export async function prepare(s: Connection, r: Request): Promise<Payment> {
+  if (s.mode !== 'local')
     return http(s, '/payments', {
       key: r.key,
       storeId: r.storeId,
@@ -182,8 +207,18 @@ export async function prepare(s: Settings, r: Request): Promise<Payment> {
     return p;
   });
 }
-export async function getPayment(s: Settings, id: string): Promise<Payment> {
-  if (s.mode === 'server') return http(s, `/payments/${id}`);
+const kakaoReads = new Map<string, Promise<Payment>>();
+export async function getPayment(s: Connection, id: string): Promise<Payment> {
+  const path = `/payments/${encodeURIComponent(id)}`;
+  if (s.mode === KAKAO_TEST_PROVIDER) {
+    const key = s.serverUrl + path;
+    const pending = kakaoReads.get(key);
+    if (pending) return pending;
+    const read = http<Payment>(s, path).finally(() => { kakaoReads.delete(key); });
+    kakaoReads.set(key, read);
+    return read;
+  }
+  if (s.mode === 'server') return http(s, path);
   return serial(async () => {
     const l = getLedger();
     const p = Object.hasOwn(l.payments, id) ? l.payments[id] : undefined;
@@ -196,12 +231,14 @@ export async function getPayment(s: Settings, id: string): Promise<Payment> {
   });
 }
 export async function complete(
-  s: Settings,
+  s: Connection,
   id: string,
   result: 'success' | 'cancel' | 'fail' | 'timeout',
 ): Promise<Payment> {
+  if (s.mode === KAKAO_TEST_PROVIDER)
+    throw new Error('카카오페이 테스트 결제는 카카오페이에서 결과를 확인해 주세요.');
   if (s.mode === 'server')
-    return http(s, `/payments/${id}/complete`, { result });
+    return http(s, `/payments/${encodeURIComponent(id)}/complete`, { result });
   return serial(async () => {
     const l = getLedger();
     const p = Object.hasOwn(l.payments, id) ? l.payments[id] : undefined;
@@ -236,8 +273,8 @@ export async function complete(
     return p;
   });
 }
-export async function getOrder(s: Settings, id: string): Promise<Order> {
-  if (s.mode === 'server') return http(s, `/orders/${id}`);
+export async function getOrder(s: Connection, id: string): Promise<Order> {
+  if (s.mode !== 'local') return http(s, `/orders/${encodeURIComponent(id)}`);
   const l = getLedger();
   const o = Object.hasOwn(l.orders, id) ? l.orders[id] : undefined;
   if (!o) throw new Error('주문을 찾지 못했어요.');

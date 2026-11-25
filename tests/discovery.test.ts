@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { settings } from '../src/core/flow';
 import { startDiscovery } from '../src/services/discovery';
-import type { Settings, Store } from '../src/core/types';
+import type { Connection, Store } from '../src/core/types';
 import catalog from '../src/data/catalog.json';
 
 beforeEach(() => vi.useFakeTimers());
@@ -13,7 +13,7 @@ afterEach(() => {
 function scan(
   demo: boolean,
   send: Parameters<typeof startDiscovery>[0]['send'],
-  loadStores: (settings: Settings) => Promise<Store[]>,
+  loadStores: (settings: Connection) => Promise<Store[]>,
   choose: (names: string[]) => Promise<string | undefined> = () => new Promise(() => {}),
 ) {
   return startDiscovery({ settings, demo, stores: catalog.stores, send }, { loadStores, choose });

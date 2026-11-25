@@ -113,6 +113,14 @@ export async function recognize(signal: AbortSignal): Promise<string> {
   }).finally(() => signal.removeEventListener('abort', abort));
 }
 
+export function openKakaoPayment(url: string, serverUrl: string, id: string, channel: 'pc' | 'mobile') {
+  const expected = new URL(`/checkout/${encodeURIComponent(id)}`, serverUrl);
+  if (expected.origin !== window.location.origin || expected.username || expected.password || url !== expected.href)
+    throw new Error('카카오페이 결제창 주소를 확인할 수 없어요.');
+  expected.searchParams.set('channel', channel);
+  window.location.assign(expected.href);
+}
+
 export function openPayment(url: string, base: string) {
   const target = new URL(url);
   const kakao = /(^|\.)(kakao\.com|kakaopay\.com)$/.test(target.hostname);

@@ -1,18 +1,18 @@
 import type { Action } from '../core/flow';
-import type { Settings, Store } from '../core/types';
+import type { Connection, Store } from '../core/types';
 import { getStores } from './api';
 import { chooseBeacon } from '../native/browserDevice';
 
 export const DEMO_DISCOVERY_MS = 8_000;
 type DiscoveryAction = Extract<Action, { type: 'STORES' | 'FOUND' | 'FAIL' }>;
 type DiscoveryOptions = {
-  settings: Settings;
+  settings: Connection;
   demo: boolean;
   stores: Store[];
   send: (action: DiscoveryAction) => void;
 };
 type Dependencies = {
-  loadStores?: (settings: Settings) => Promise<Store[]>;
+  loadStores?: (settings: Connection) => Promise<Store[]>;
   choose?: (names: string[]) => Promise<string | undefined>;
 };
 

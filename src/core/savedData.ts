@@ -1,4 +1,4 @@
-import type { Line, Order, Payment, PricedLine, Quote, Request, Settings, Snapshot } from './types';
+import { KAKAO_TEST_ORIGIN, KAKAO_TEST_PROVIDER, isQaOrigin, type Connection, type Line, type Order, type Payment, type PricedLine, type Quote, type Request, type Settings, type Snapshot } from './types.ts';
 
 type RecordValue = Record<string, unknown>;
 
@@ -14,7 +14,7 @@ const isCount = (value: unknown): value is number =>
 const isOptions = (value: unknown): value is Record<string, string> =>
   isRecord(value) && Object.values(value).every(isString);
 
-function isLine(value: unknown): value is Line {
+export function isLine(value: unknown): value is Line {
   return isRecord(value) && isId(value.id) && isId(value.productId) &&
     isCount(value.quantity) && value.quantity <= 20 && isOptions(value.options);
 }
@@ -41,10 +41,19 @@ export function matchesQuoteItems(lines: Line[], quote: Quote): boolean {
   });
 }
 
+function isConnection(value: unknown): value is Connection {
+  return isRecord(value) && (
+    value.mode === 'local' || (value.mode === 'server' && isId(value.serverUrl)) ||
+    (value.mode === KAKAO_TEST_PROVIDER && (value.serverUrl === KAKAO_TEST_ORIGIN || isQaOrigin(value.serverUrl)))
+  );
+}
+
+const validConnection = (value: unknown) => value === undefined || isConnection(value);
+
 export function isRequest(value: unknown): value is Request {
   return isRecord(value) && isId(value.key) && isId(value.storeId) &&
     Array.isArray(value.items) && value.items.every(isLine) &&
-    isQuote(value.expected) && value.storeId === value.expected.storeId &&
+    isQuote(value.expected) && value.storeId === value.expected.storeId && validConnection(value.connection) &&
     matchesQuoteItems(value.items, value.expected);
 }
 
@@ -54,9 +63,11 @@ const paymentStates = new Set<unknown>([
 
 export function isPayment(value: unknown): value is Payment {
   return isRecord(value) && isId(value.id) && paymentStates.has(value.state) &&
-    isId(value.provider) && isQuote(value.snapshot) &&
+    isId(value.provider) && isQuote(value.snapshot) && validConnection(value.connection) &&
     (value.orderId === undefined || isId(value.orderId)) &&
     (value.redirect === undefined || isString(value.redirect)) &&
+    (value.checkoutAvailable === undefined || (isRecord(value.checkoutAvailable) &&
+      typeof value.checkoutAvailable.pc === 'boolean' && typeof value.checkoutAvailable.mobile === 'boolean')) &&
     (value.created === undefined || isAmount(value.created));
 }
 
@@ -64,7 +75,11 @@ export function isOrder(value: unknown): value is Order {
   return isRecord(value) && isId(value.id) && isId(value.paymentId) &&
     isId(value.number) && isAmount(value.created) && isQuote(value.snapshot) &&
     (value.status === 'received' || value.status === 'preparing' || value.status === 'ready') &&
-    typeof value.demo === 'boolean';
+    typeof value.demo === 'boolean' && validConnection(value.connection);
+}
+
+export function orderHistoryKey(storeId: string, connection?: Connection) {
+  return connection?.mode === KAKAO_TEST_PROVIDER ? `${KAKAO_TEST_PROVIDER}:${storeId}` : storeId;
 }
 
 const displaySettings = ['dark', 'contrast', 'staffHelp', 'large', 'quickOptions'] as const;
@@ -88,7 +103,7 @@ export function restoreSnapshot(value: unknown, defaults: Settings) {
   const history = Object.fromEntries(
     Object.entries(isRecord(saved.history) ? saved.history : {})
       .filter((entry): entry is [string, Order] =>
-        isOrder(entry[1]) && entry[0] === entry[1].snapshot.storeId),
+        isOrder(entry[1]) && entry[0] === orderHistoryKey(entry[1].snapshot.storeId, entry[1].connection)),
   );
   const request = isRequest(saved.request) ? saved.request : undefined;
   const payment = isPayment(saved.payment) ? saved.payment : undefined;
@@ -96,7 +111,8 @@ export function restoreSnapshot(value: unknown, defaults: Settings) {
   const order = isOrder(saved.order) ? saved.order : queued[0];
   const queuedOrders = [...new Map(queued.filter(item => item.id !== order?.id)
     .map(item => [item.id, item])).values()];
-  const invalidConnection = (request || payment || order) &&
+  const needsLegacyConnection = [request, payment, order, ...queuedOrders].some(item => item && !item.connection);
+  const invalidConnection = needsLegacyConnection &&
     (preferences.mode === 'server'
       ? !settings.serverUrl.trim()
       : preferences.mode !== 'local' &&
@@ -110,6 +126,13 @@ export function restoreSnapshot(value: unknown, defaults: Settings) {
     (saved.queuedOrders !== undefined &&
       (!Array.isArray(saved.queuedOrders) || queued.length !== saved.queuedOrders.length)) ||
     !!invalidConnection ||
+    (payment?.provider === KAKAO_TEST_PROVIDER && payment.connection?.mode !== KAKAO_TEST_PROVIDER) ||
+    (payment?.connection?.mode === KAKAO_TEST_PROVIDER && payment.provider !== KAKAO_TEST_PROVIDER) ||
+    !!(request?.connection && payment?.connection && (
+      request.connection.mode !== payment.connection.mode ||
+      ('serverUrl' in request.connection && (!('serverUrl' in payment.connection) ||
+        request.connection.serverUrl !== payment.connection.serverUrl))
+    )) ||
     !!(request && payment && (request.storeId !== payment.snapshot.storeId ||
       !matchesQuoteItems(request.items, payment.snapshot)));
   const storageNotice = saved.cart !== undefined &&

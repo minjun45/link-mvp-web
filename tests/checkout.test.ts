@@ -69,7 +69,7 @@ test('known approval survives order-query failure and recovery fetches only the 
   fetchMock.mockResolvedValueOnce(json(approved)).mockRejectedValueOnce(new Error('order response lost'));
   const delayed = reduce(verifying, (await check(verifying))!);
   expect(delayed.flow).toBe('P02-V');
-  expect(delayed.payment).toEqual(approved);
+  expect(delayed.payment).toEqual({ ...approved, connection: { mode: 'server', serverUrl: server.serverUrl } });
   expect(delayed.request).toBe(verifying.request);
   expect(reduce(delayed, { type: 'PAYMENT_RESULT', payment: ready })).toBe(delayed);
   expect(reduce(delayed, { type: 'NAV', flow: 'PAYMENT_EXTERNAL' })).toBe(delayed);

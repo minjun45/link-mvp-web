@@ -6,6 +6,7 @@ import {
   View,
 } from 'react-native';
 import { useApp } from './src/services/useApp';
+import { lastOrderForStore } from './src/core/flow';
 import { DEMO_DISCOVERY_MS } from './src/services/discovery';
 import {
   Button,
@@ -27,9 +28,11 @@ import {
   Photo,
   Stepper,
 } from './src/ui/figma';
-import type { Group, PricedLine, Product, Quote, Settings } from './src/core/types';
+import { KAKAO_TEST_PROVIDER, type Group, type PricedLine, type Product, type Quote, type Settings } from './src/core/types';
 import { recentOrderProducts, fromOrder, key, money, quote, unit, unitFor, paymentMatchesRequest } from './src/core/domain';
 import * as Device from './src/native/browserDevice';
+import { paymentChannel } from './src/native/paymentChannel';
+import { canOpenKakaoPayment } from './src/services/checkout';
 import { useAppDialog } from './src/ui/dialog';
 import { staffHelpText } from './src/ui/staffHelp';
 
@@ -93,6 +96,25 @@ export default function App() {
   const { alert, helpCard, dialog } = useAppDialog(theme);
   const entryScreen = ['START', 'BLE_GUIDE', 'V5-01', 'V5-01e', 'V5-02', 'V5-02e', 'V5-02s', 'V5-03', 'V5-04'].includes(s.flow);
   const screenKey = `${s.flow}:${s.revision}`;
+  const kakaoPaymentScreen = s.payment?.connection?.mode === KAKAO_TEST_PROVIDER &&
+    ['PAYMENT_EXTERNAL', 'P02-V'].includes(s.flow);
+  const kakaoChannel = kakaoPaymentScreen ? paymentChannel(globalThis.navigator) : 'pc';
+  const kakaoStatus = kakaoPaymentScreen && (
+    <>
+      <div role="status">
+        <T>{app.checkingKakaoPayment || (!s.error && s.payment?.state === 'approving')
+          ? '결제 결과를 확인하고 있어요.'
+          : !s.error && s.payment?.checkoutAvailable?.[kakaoChannel] === false
+          ? '이 기기에서 카카오페이 결제창을 열 수 없어요. 결제 결과를 확인해 주세요.'
+          : s.error || s.payment?.state !== 'ready'
+          ? '아직 결제 결과를 확인하지 못했어요. 다시 결제하지 말아 주세요.'
+          : kakaoChannel === 'mobile'
+          ? '카카오톡에서 결제를 진행해 주세요.'
+          : '카카오페이 결제창에서 결제를 진행해 주세요.'}</T>
+      </div>
+      {s.storageNotice && <div role="alert"><T>{s.storageNotice}</T></div>}
+    </>
+  );
   const [typingScreen, setTypingScreen] = useState('');
   const composingInput = useRef<EventTarget | null>(null);
   const pendingResultFocus = useRef<AbortController | null>(null);
@@ -156,7 +178,8 @@ export default function App() {
   const product = s.products.find(x => x.id === s.productId);
   const groupName = wizardGroup?.name || '옵션';
   const title =
-    s.flow === 'V5-11' && s.orderStatusChecked && s.order?.status === 'ready'
+    kakaoPaymentScreen && s.flow === 'PAYMENT_EXTERNAL' ? '카카오페이로 결제해 주세요'
+      : s.flow === 'V5-11' && s.orderStatusChecked && s.order?.status === 'ready'
       ? titles['V5-12']
       : s.flow === 'V5-M3'
       ? `${groupName}${objectParticle(groupName)} 골라 주세요`
@@ -825,7 +848,7 @@ export default function App() {
       };
       break;
     case 'V5-R1': {
-      const last = s.history[s.storeId!];
+      const last = lastOrderForStore(s);
       let current: Quote | undefined;
       if (last) {
         try {
@@ -922,7 +945,7 @@ export default function App() {
           (a, b) => Number(Boolean(b.popular)) - Number(Boolean(a.popular)),
         );
       if (query) typedResultMessage = items.length ? `메뉴 검색 결과 ${items.length}개` : '검색 결과가 없어요.';
-      const last = s.history[s.storeId!];
+      const last = lastOrderForStore(s);
       const recent = recentOrderProducts(last, s.products);
       const additional = Math.min(5, items.length - s.menuLimit);
       body = (
@@ -1297,17 +1320,39 @@ export default function App() {
       );
       break;
     case 'PAYMENT_EXTERNAL': {
-      const mock = !s.payment?.provider.startsWith('kakao');
+      const payment = s.payment;
+      const kakaoTest = kakaoPaymentScreen;
+      const mock = !payment?.provider.startsWith('kakao');
+      const openPayment = () => {
+        try {
+          if (!payment?.redirect) throw new Error('결제 창 주소를 확인할 수 없어요.');
+          const connection = payment.connection;
+          Device.openPayment(payment.redirect, connection && 'serverUrl' in connection
+            ? connection.serverUrl : s.settings.serverUrl);
+        } catch (e) {
+          alert('결제 창 확인', e instanceof Error ? e.message : '결제 창을 열 수 없어요.');
+        }
+      };
       body = (
         <>
+          {kakaoTest && payment && <Receipt value={payment.snapshot} products={s.products} />}
           <Card>
-            <T kind="section">{mock ? '테스트 결제' : '카카오페이 결제'}</T>
-            <T>
-              {mock
-                ? '실제로 돈이 청구되지 않아요. 아래 버튼으로 결제 결과를 체험해요.'
-                : '새 탭에서 결제를 진행한 뒤 이 화면에서 결과를 확인해 주세요.'}
-            </T>
-            <T kind="section">{money(s.payment?.snapshot.total || 0)}</T>
+            <T kind="section">{kakaoTest ? '카카오페이 테스트 결제' : mock ? '테스트 결제' : '카카오페이 결제'}</T>
+            {kakaoTest ? (
+              <>
+                <T>실제로 돈이 청구되지 않아요.</T>
+                <T>{kakaoChannel === 'mobile'
+                  ? '결제하기를 누르면 카카오페이 화면이 열리고 카카오톡으로 이동할 수 있어요. 결제가 끝난 뒤 주문하던 브라우저로 돌아와 주세요.'
+                  : '결제하기를 누르면 이 탭에 카카오페이 결제창이 열려요. LINK로 돌아오면 결제 결과를 확인해요.'}</T>
+                {kakaoStatus}
+              </>
+            ) : (
+              <>
+                <T>{mock ? '실제로 돈이 청구되지 않아요. 아래 버튼으로 결제 결과를 체험해요.'
+                  : '새 탭에서 결제를 진행한 뒤 이 화면에서 결과를 확인해 주세요.'}</T>
+                <T kind="section">{money(payment?.snapshot.total || 0)}</T>
+              </>
+            )}
           </Card>
           {mock && (
             <>
@@ -1325,7 +1370,11 @@ export default function App() {
           )}
         </>
       );
-      primary = mock
+      primary = kakaoTest
+        ? canOpenKakaoPayment(s, kakaoChannel)
+          ? { label: '카카오페이 결제하기', run: app.openKakaoCheckout }
+          : undefined
+        : mock
         ? {
             label: app.busy ? '결제 처리 중' : '테스트 결제 완료',
             run: () => app.complete('success'),
@@ -1339,17 +1388,9 @@ export default function App() {
               run: () => app.complete('cancel'),
               disabled: app.busy,
             }
-          : {
-              label: '결제 창 열기',
-              run: () => {
-                try {
-                  if (!s.payment?.redirect) throw new Error('결제 창 주소가 없어요.');
-                  Device.openPayment(s.payment.redirect, s.settings.serverUrl);
-                } catch (e) {
-                  alert('결제 창 확인', e instanceof Error ? e.message : '결제 창을 열 수 없어요.');
-                }
-              },
-            },
+          : kakaoTest
+          ? { label: '결제 결과 확인', run: app.checkKakaoPayment }
+          : { label: '결제 창 열기', run: openPayment },
       ];
       break;
     }
@@ -1400,19 +1441,25 @@ export default function App() {
       body = (
         <>
           <Card>
-            <T>{app.busy ? '결제 상태를 확인하고 있어요.' :
-              s.message || '이전 결제의 결과를 다시 확인해 주세요.'}</T>
-            <T>
-              결제 결과가 확인되지 않았다면 새로 결제하지 말고 결과를 다시
-              확인해 주세요.
-            </T>
+            {kakaoPaymentScreen ? kakaoStatus : <>
+              <T>{app.busy ? '결제 상태를 확인하고 있어요.' :
+                s.message || '이전 결제의 결과를 다시 확인해 주세요.'}</T>
+              <T>결제 결과가 확인되지 않았다면 새로 결제하지 말고 결과를 다시 확인해 주세요.</T>
+            </>}
           </Card>
           {s.payment && <Receipt value={s.payment.snapshot} products={s.products} />}
         </>
       );
-      primary = { label: '결제 결과 다시 확인', run: () => nav('P02-V'), disabled: app.busy };
-      secondary =
-        s.payment?.state === 'ready' && !s.error && !app.busy && paymentMatchesRequest(s.payment, s.request)
+      primary = {
+        label: '결제 결과 다시 확인',
+        run: kakaoPaymentScreen ? app.checkKakaoPayment : () => nav('P02-V'),
+        disabled: app.busy,
+      };
+      secondary = kakaoPaymentScreen
+        ? canOpenKakaoPayment(s, kakaoChannel)
+          ? [{ label: '기존 결제 이어하기', run: app.openKakaoCheckout }]
+          : []
+        : s.payment?.state === 'ready' && !s.error && !app.busy && paymentMatchesRequest(s.payment, s.request)
           ? [
               {
                 label: '기존 결제 이어하기',
@@ -1648,13 +1695,13 @@ export default function App() {
   // Waiting screens do not take focus (see above), so say what is happening.
   // Not while the browser's Bluetooth chooser is open on top of the page.
   const waitingStatus = ['V5-04', 'V5-09'].includes(s.flow) ? title :
-    s.flow === 'P02-V' && app.busy ? '결제 상태를 확인하고 있어요.' : '';
+    s.flow === 'P02-V' && !kakaoPaymentScreen && app.busy ? '결제 상태를 확인하고 있어요.' : '';
   const hideBack = ['BOOT', 'START', 'V5-O1', 'V5-09', 'P02-V', 'V5-10', 'V5-13'].includes(s.flow) ||
     (['PAYMENT_EXTERNAL', 'V5-12'].includes(s.flow) && app.busy);
   const hideSettings = ['SETTINGS', 'V5-09', 'PAYMENT_EXTERNAL', 'P02-V', 'V5-13'].includes(s.flow) ||
     (s.flow === 'V5-12' && app.busy);
   const showStaffHelp = s.settings.staffHelp && s.flow !== 'V5-13';
-  const alertText = s.error === 'CHANGE_STORE' ? '' : s.error || s.storageNotice;
+  const alertText = s.error === 'CHANGE_STORE' || kakaoPaymentScreen ? '' : s.error || s.storageNotice;
   const statusMessage = app.listening
     ? '듣고 있어요. 찾을 이름을 말해 주세요.'
     : searchStatus || waitingStatus || s.notice || screenMessage;

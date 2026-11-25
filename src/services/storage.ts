@@ -1,13 +1,18 @@
 import type { Snapshot } from '../core/types';
 const snapshotKey = 'link-web.state.v1';
 let pending: Promise<unknown> = Promise.resolve();
-export async function readSnapshot(): Promise<unknown> {
-  const text = localStorage.getItem(snapshotKey);
-  return text === null ? undefined : JSON.parse(text);
+export function readSnapshot(): Promise<unknown> {
+  return serial(async () => {
+    const text = localStorage.getItem(snapshotKey);
+    return text === null ? undefined : JSON.parse(text);
+  });
 }
-export function persist(value: Snapshot): Promise<void> {
+export function persist(value: Snapshot, canWrite = () => true): Promise<void> {
   const encoded = JSON.stringify(value);
-  return serial(async () => localStorage.setItem(snapshotKey, encoded));
+  return serial(async () => {
+    if (!canWrite()) throw new DOMException('Page state changed', 'AbortError');
+    localStorage.setItem(snapshotKey, encoded);
+  });
 }
 export function serial<T>(work: () => Promise<T>): Promise<T> {
   const next = pending.catch(() => {}).then(() => {

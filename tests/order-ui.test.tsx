@@ -1,9 +1,9 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, test, vi } from 'vitest';
-import type { Product, State } from '../src/core/types';
+import { KAKAO_TEST_ORIGIN, KAKAO_TEST_PROVIDER, type Product, type State } from '../src/core/types';
 import { initial } from '../src/core/flow';
-import { defaults } from '../src/core/domain';
+import { defaults, quote } from '../src/core/domain';
 import catalog from '../src/data/catalog.json';
 import App from '../App';
 import { Icon, Photo } from '../src/ui/figma';
@@ -25,6 +25,47 @@ function render(flow: State['flow'], extra: Partial<State> = {}) {
   mock.state = { ...initial, ...store, flow, ...extra };
   return renderToStaticMarkup(<App />);
 }
+
+test('integrated KakaoPay uses the existing checkout screen and leaves START unchanged', () => {
+  expect(render('START', { kakaoTest: true })).toEqual(render('START', { kakaoTest: false }));
+  const line = { id: 'kakao-line', productId: products[0].id, options: defaults(products[0]), quantity: 2 };
+  const receipt = quote(catalog.stores[0], products, [line]);
+  const payment = {
+    id: 'kakao-payment', provider: KAKAO_TEST_PROVIDER, state: 'ready' as const, snapshot: receipt,
+    redirect: KAKAO_TEST_ORIGIN + '/checkout/kakao-payment',
+  };
+  const html = render('PAYMENT_EXTERNAL', {
+    payment: { ...payment, connection: { mode: KAKAO_TEST_PROVIDER, serverUrl: KAKAO_TEST_ORIGIN } },
+  });
+  expect(html).toContain('실제로 돈이 청구되지 않아요.');
+  expect(html).toContain(receipt.total.toLocaleString('ko-KR') + '원');
+  expect(html).toContain('카카오페이 결제하기');
+  expect(html).toMatch(/role="status"[^>]*>[^>]*<div[^>]*>카카오페이 결제창에서 결제를 진행해 주세요/);
+  expect(html).toContain('결제 결과 확인');
+  expect(html).not.toMatch(/테스트 결제 완료|실패 상황 체험|시간 초과 체험/);
+  expect(render('PAYMENT_EXTERNAL', { payment: { ...payment, provider: 'offline' } })).toContain('테스트 결제 완료');
+});
+
+test('mobile checkout describes the app switch, keeps one status message and omits the unavailable action', () => {
+  const product = products[0];
+  const receipt = quote(catalog.stores[0], products, [{ id: 'item', productId: product.id, options: defaults(product), quantity: 1 }]);
+  const payment = {
+    id: 'mobile-test', provider: KAKAO_TEST_PROVIDER, state: 'ready' as const, snapshot: receipt,
+    connection: { mode: KAKAO_TEST_PROVIDER, serverUrl: KAKAO_TEST_ORIGIN } as const,
+    redirect: KAKAO_TEST_ORIGIN + '/checkout/mobile-test', checkoutAvailable: { pc: true, mobile: false },
+  };
+  vi.stubGlobal('navigator', { userAgent: 'iPhone' });
+  try {
+    const html = render('PAYMENT_EXTERNAL', { payment });
+    expect(html).toContain('주문하던 브라우저로 돌아와 주세요.');
+    expect(html.match(/이 기기에서 카카오페이 결제창을 열 수 없어요/g)).toHaveLength(1);
+    expect(html).not.toContain('카카오페이 결제하기');
+    expect(html).toContain('결제 결과 확인');
+    expect(html).not.toContain('QR');
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
 
 test('menu search field is named by its purpose and shows its example as a native placeholder', () => {
   const html = render('V5-05');

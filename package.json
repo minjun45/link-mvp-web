@@ -6,6 +6,9 @@
   "engines": { "node": ">=22.12.0" },
   "scripts": {
     "dev": "vite",
+    "kakaopay:local": "node --experimental-strip-types scripts/kakaopay-local.ts",
+    "qa:render": "node --experimental-strip-types scripts/kakaopay-local.ts --qa",
+    "qa:vercel": "node --experimental-strip-types scripts/qa-vercel.ts --check && npm run build -- --outDir .vercel/output/static && node --experimental-strip-types scripts/qa-vercel.ts",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",

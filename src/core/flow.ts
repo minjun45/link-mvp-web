@@ -1,5 +1,6 @@
 import type {
   State,
+  Connection,
   Snapshot,
   Store,
   Product,
@@ -9,8 +10,9 @@ import type {
   Settings,
   Flow,
 } from './types';
+import { KAKAO_TEST_ORIGIN, KAKAO_TEST_PROVIDER } from './types';
 import { defaults, initialOptions, quote, fromOrder, unit, sameQuote, paymentMatchesRequest } from './domain';
-import { matchesQuoteItems, restoreSnapshot } from './savedData';
+import { matchesQuoteItems, orderHistoryKey, restoreSnapshot } from './savedData';
 export const settings: Settings = {
   dark: false,
   contrast: false,
@@ -26,6 +28,7 @@ export const initial: State = {
   cart: [],
   history: {},
   flow: 'BOOT',
+  kakaoTest: false,
   recoveryRequired: false,
   storageNotice: '',
   orderStatusChecked: true,
@@ -51,10 +54,25 @@ export const initial: State = {
   notice: '',
   revision: 0,
 };
+export function catalogConnection(state: State): Connection {
+  const { mode, serverUrl } = state.settings;
+  if (state.kakaoTest && (state.discovery === 'demo' || mode === 'local'))
+    return { mode: KAKAO_TEST_PROVIDER, serverUrl: state.kakaoOrigin ?? KAKAO_TEST_ORIGIN };
+  return mode === 'server' ? { mode, serverUrl } : { mode };
+}
+
+export function lastOrderForStore(state: State) {
+  if (!state.storeId) return;
+  return state.history[orderHistoryKey(state.storeId, catalogConnection(state))] ?? state.history[state.storeId];
+}
+
 export type Action =
   | {
       type: 'HYDRATE';
       snapshot?: unknown;
+      kakaoTest?: boolean;
+      kakaoOrigin?: string;
+      resumed?: boolean;
       stores: Store[];
       products: Product[];
     }
@@ -257,6 +275,9 @@ export function reduce(s: State, a: Action): State {
         return {
           ...initial,
           ...saved,
+          kakaoTest: a.kakaoTest === true,
+          ...(a.kakaoOrigin ? { kakaoOrigin: a.kakaoOrigin } : {}),
+          revision: a.resumed ? s.revision + 1 : 0,
           stores: a.stores,
           products: a.products,
           recoveryRequired,
@@ -364,7 +385,7 @@ export function reduce(s: State, a: Action): State {
         if (s.request || s.payment || s.recoveryRequired) return goto(s, 'P02-V');
         if (s.order) return reduce(s, { type: 'OPEN_ORDER' });
         return discover(
-          a.demo && s.settings.mode !== 'local'
+          a.demo && !s.kakaoTest && s.settings.mode !== 'local'
             ? reduce(s, { type: 'SETTINGS', value: { mode: 'local' } })
             : s,
           a.demo,
@@ -414,7 +435,7 @@ export function reduce(s: State, a: Action): State {
       }
       case 'MENU_LOADED':
         return {
-          ...goto(s, s.history[s.storeId!] ? 'V5-R1' : entryMenu(a.products)),
+          ...goto(s, lastOrderForStore(s) ? 'V5-R1' : entryMenu(a.products)),
           products: a.products,
           category: a.products[0]?.category || '',
         };
@@ -464,7 +485,7 @@ export function reduce(s: State, a: Action): State {
         const line = a.lineId
           ? s.cart.find(l => l.id === a.lineId)
           : a.recent
-          ? s.history[s.storeId!]?.snapshot.items.find(
+          ? lastOrderForStore(s)?.snapshot.items.find(
               l => l.productId === p.id,
             )
           : undefined;
@@ -605,7 +626,7 @@ export function reduce(s: State, a: Action): State {
         } else if (s.request || s.payment) {
           return ['V5-09', 'PAYMENT_EXTERNAL', 'P02-V'].includes(s.flow) ? s : goto(s, 'P02-V');
         }
-        const cart = a.type === 'CHECKOUT' && a.reorder ? fromOrder(s.history[s.storeId!]) : s.cart;
+        const cart = a.type === 'CHECKOUT' && a.reorder ? fromOrder(lastOrderForStore(s)!) : s.cart;
         const expected = quote(
           s.stores.find(x => x.id === s.storeId),
           s.products,
@@ -616,6 +637,7 @@ export function reduce(s: State, a: Action): State {
           payment: undefined,
           cart,
           request: {
+            connection: catalogConnection(s),
             key: a.key,
             storeId: s.storeId!,
             items: cart.map(l => ({ ...l, options: { ...l.options } })),
@@ -671,11 +693,12 @@ export function reduce(s: State, a: Action): State {
             order: a.order,
             queuedOrders: queued.length ? queued : undefined,
             orderStatusChecked: true,
-            history: { ...s.history, [a.order.snapshot.storeId]: a.order },
+            history: { ...s.history, [orderHistoryKey(a.order.snapshot.storeId, a.order.connection)]: a.order },
             cart: unchanged ? [] : s.cart,
             signal: 'success',
           };
         }
+        const kakao = p.connection?.mode === KAKAO_TEST_PROVIDER;
         const flow =
           p.state === 'cancelled'
             ? 'P02-C'
@@ -683,7 +706,11 @@ export function reduce(s: State, a: Action): State {
             ? 'P02-F'
             : p.state === 'expired'
             ? 'P02-T'
-            : 'P02-V';
+            : kakao && s.flow === 'PAYMENT_EXTERNAL' ? 'PAYMENT_EXTERNAL' : 'P02-V';
+        if (kakao && s.flow === flow && s.payment?.state === p.state && s.payment.redirect === p.redirect &&
+            s.payment.orderId === p.orderId && s.payment.checkoutAvailable?.pc === p.checkoutAvailable?.pc &&
+            s.payment.checkoutAvailable?.mobile === p.checkoutAvailable?.mobile && s.error === (a.error ?? ''))
+          return s;
         return {
           ...(s.flow === flow ? s : goto(s, flow)),
           payment: p,
@@ -741,7 +768,6 @@ export function reduce(s: State, a: Action): State {
           ...(connection
             ? {
                 cart: [],
-                history: {},
                 storeId: undefined,
                 order: undefined,
                 returnTo: 'START',

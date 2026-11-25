@@ -1,7 +1,19 @@
 node_modules/
 dist/
 coverage/
+.vercel/
+*.sqlite-journal
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
 *.local
+.env
+.env.*
+kakaopay-test.env
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
 npm-debug.log*
 
 # Local Figma reference export (not needed for the app or tests).
