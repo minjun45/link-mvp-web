@@ -28,7 +28,7 @@ import {
   Stepper,
 } from './src/ui/figma';
 import type { Group, PricedLine, Product, Quote, Settings } from './src/core/types';
-import { frequent, fromOrder, key, money, quote, unit, unitFor } from './src/core/domain';
+import { recentOrderProducts, fromOrder, key, money, quote, unit, unitFor, paymentMatchesRequest } from './src/core/domain';
 import * as Device from './src/native/browserDevice';
 import { useAppDialog } from './src/ui/dialog';
 import { staffHelpText } from './src/ui/staffHelp';
@@ -96,10 +96,14 @@ export default function App() {
   const [typingScreen, setTypingScreen] = useState('');
   const composingInput = useRef<EventTarget | null>(null);
   const pendingResultFocus = useRef<AbortController | null>(null);
-  useEffect(() => () => pendingResultFocus.current?.abort(), [screenKey]);
+  useEffect(() => () => {
+    pendingResultFocus.current?.abort();
+    composingInput.current = null;
+  }, [screenKey]);
   const heading = useRef<HTMLHeadingElement>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
+  const moreMenuFocus = useRef<number | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [titleScrolled, setTitleScrolled] = useState(false);
   // The menu group at the top of the list, highlighted in the category bar.
@@ -152,7 +156,7 @@ export default function App() {
   const product = s.products.find(x => x.id === s.productId);
   const groupName = wizardGroup?.name || '옵션';
   const title =
-    s.flow === 'V5-11' && s.order?.status === 'ready'
+    s.flow === 'V5-11' && s.orderStatusChecked && s.order?.status === 'ready'
       ? titles['V5-12']
       : s.flow === 'V5-M3'
       ? `${groupName}${objectParticle(groupName)} 골라 주세요`
@@ -255,6 +259,16 @@ export default function App() {
     viewport?.addEventListener('resize', settle, { signal: controller.signal });
     timer = window.setTimeout(go, 800); // no resize seen (keyboard already closed)
   };
+
+  useEffect(() => {
+    const from = moreMenuFocus.current;
+    moreMenuFocus.current = null;
+    if (from === null || s.flow !== 'V5-05' && s.flow !== 'V5-M1') return;
+    const rows = Array.from(scroll.current?.querySelectorAll<HTMLButtonElement>('.menu-items > button') ?? []);
+    const next = rows.slice(from).find(row => !row.disabled);
+    if (next) next.focus();
+    else focusOnce(scroll.current?.querySelector('.menu-group h2'));
+  }, [s.flow, s.menuLimit]);
   useEffect(() => {
     if ((s.flow === 'V5-01' && s.discovery === 'ble') || s.flow === 'V5-05c') return;
 
@@ -303,6 +317,7 @@ export default function App() {
       <div
         style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}
         onCompositionStart={event => {
+          pendingResultFocus.current?.abort();
           composingInput.current = event.target;
           setTypingScreen('');
         }}
@@ -325,6 +340,7 @@ export default function App() {
           value={s.query}
           onChangeText={value => {
             app.cancelVoiceSearch();
+            pendingResultFocus.current?.abort();
             d({ type: 'QUERY', value });
           }}
           accessibilityLabel={label}
@@ -346,8 +362,10 @@ export default function App() {
         />
       </div>
       <button type="button" className="app-button voice-button" onClick={() => {
+        pendingResultFocus.current?.abort();
         setTypingScreen('');
-        void app.voiceSearch();
+        if (app.listening) app.cancelVoiceSearch();
+        else void app.voiceSearch();
       }}>
         <Icon name="mic" size={20} color="#191919" />
         <T
@@ -357,7 +375,7 @@ export default function App() {
             fontWeight: '700',
           }}
         >
-          {app.listening ? '듣는 중' : '말하기'}
+          {app.listening ? '음성 검색 취소' : '말하기'}
         </T>
       </button>
     </View>
@@ -374,7 +392,7 @@ export default function App() {
     </T>
   );
   // Section titles inside a screen are <h2>, under the screen's <h1>, so
-  // screen reader users can jump between sections ("자주 시킨 메뉴", "수량" …).
+  // screen reader users can jump between sections ("최근 주문 메뉴", "수량" …).
   const sectionLabel = (text: string, id?: string) => (
     <h2 id={id} className="section-heading" style={{ fontSize: 20 * theme.scale }}>{text}</h2>
   );
@@ -477,6 +495,16 @@ export default function App() {
       body = <ActivityIndicator size="large" />;
       break;
     case 'START':
+      if (s.recoveryRequired || s.request || s.payment) {
+        body = subtitle('진행 중인 결제 결과를 먼저 확인해 주세요.');
+        primary = { label: '기존 결제 확인하기', run: () => nav('P02-V') };
+        break;
+      }
+      if (s.order) {
+        body = subtitle('아직 픽업하지 않은 주문이 있어요.');
+        primary = { label: '진행 중인 주문 보기', run: () => d({ type: 'OPEN_ORDER' }) };
+        break;
+      }
       body = (
         <>
           {subtitle('실제 매장을 찾거나 데모로 먼저 체험해 보세요.')}
@@ -895,25 +923,32 @@ export default function App() {
         );
       if (query) typedResultMessage = items.length ? `메뉴 검색 결과 ${items.length}개` : '검색 결과가 없어요.';
       const last = s.history[s.storeId!];
-      const recent = frequent(last, s.products);
+      const recent = recentOrderProducts(last, s.products);
+      const additional = Math.min(5, items.length - s.menuLimit);
       body = (
         <>
           {search('메뉴 이름 (예: 라떼)', '메뉴 이름으로 찾기')}
           {!query && recent.length > 0 && (
-            <Foldable key={s.storeId} label={`자주 시킨 메뉴 ${recent.length}개`}>
+            <Foldable key={s.storeId} label={`최근 주문 메뉴 ${recent.length}개`}>
               {recent.map(p => {
                 const line = last?.snapshot.items.find(
                   i => i.productId === p.id,
                 );
+                let price: string | undefined;
+                if (line) {
+                  try {
+                    price = money(quote(store, s.products, [{ ...line, id: p.id, quantity: 1 }]).total);
+                  } catch {
+                    // Saved options may no longer be offered.
+                  }
+                }
                 return (
                   <NavigationRow
                     key={p.id}
                     photo
                     title={p.name}
-                    // The options chosen last time, so they can be heard
-                    // before opening the menu (it opens with them selected).
-                    description={line?.labels.join(' · ') || undefined}
-                    price={line ? money(line.unitPrice) : undefined}
+                    description={price ? line?.labels.join(' · ') || undefined : '현재 옵션을 다시 확인해 주세요.'}
+                    price={price}
                     onPress={() =>
                       d({ type: 'SELECT_PRODUCT', id: p.id, recent: true })
                     }
@@ -1012,12 +1047,12 @@ export default function App() {
               {voicePrefix && `${voicePrefix}검색 결과 · 0개. `}일치하는 메뉴가 없어요. 다른 이름으로 찾아 주세요.
             </T>
           )}
-          {!groupedMenu && items.length > s.menuLimit && (
+          {!groupedMenu && additional > 0 && (
             <Button
-              label="메뉴 5개 더 듣기"
+              label={`메뉴 ${additional}개 더 보기`}
               onPress={() => {
+                moreMenuFocus.current = scroll.current?.querySelectorAll('.menu-items > button').length ?? 0;
                 d({ type: 'MORE_MENU' });
-                app.speak('다음 메뉴 5개를 보여드려요.');
               }}
             />
           )}
@@ -1142,21 +1177,32 @@ export default function App() {
               <T>아직 담은 메뉴가 없어요.</T>
             </Card>
           )}
-          {s.cart.map((l, i) => (
-            <Card key={l.id}>
+          {s.cart.map((l, i) => {
+            const item = s.products.find(p => p.id === l.productId);
+            const available = !!item && !item.soldOut;
+            let priced = cartQuote?.items[i];
+            if (available && !priced) {
+              try {
+                priced = quote(store, s.products, [l]).items[0];
+              } catch {
+                // Show which individual lines need attention.
+              }
+            }
+            return <Card key={l.id}>
               <View style={[st.row, st.wrap, { alignItems: 'flex-start' }]}>
                 <View style={[st.grow, { flexBasis: 120 }]}>
                   <T kind="section">
-                    {s.products.find(p => p.id === l.productId)?.name || '메뉴'}
+                    {item?.name || '판매가 종료된 메뉴'}
                   </T>
                   <T kind="small">
-                    {cartQuote?.items[i]?.labels.join(' · ') ||
-                      '옵션 확인이 필요해요.'}
+                    {available
+                      ? priced ? priced.labels.join(' · ') : '옵션을 확인해 주세요.'
+                      : '지금 주문할 수 없어요. 장바구니에서 삭제해 주세요.'}
                   </T>
                 </View>
-                {cartQuote && (
+                {priced && (
                   <T style={{ fontSize: 20 * theme.scale, fontWeight: '700' }}>
-                    {money(cartQuote.items[i].total)}
+                    {money(priced.total)}
                   </T>
                 )}
               </View>
@@ -1177,6 +1223,7 @@ export default function App() {
                   <Button
                     appearance="compact"
                     label="옵션 변경"
+                    disabled={!available}
                     onPress={() =>
                       d({
                         type: 'SELECT_PRODUCT',
@@ -1195,8 +1242,8 @@ export default function App() {
                   />
                 </View>
               </View>
-            </Card>
-          ))}
+            </Card>;
+          })}
           <Button label="+ 메뉴 더 담기" onPress={menu} />
           {cartQuote && (
             <>
@@ -1324,10 +1371,10 @@ export default function App() {
         <InfoRow icon="card" label="결제 상태" value={s.flow === 'P02-C' ? '결제 취소' : '결제 실패'} />
         <T>담아 둔 메뉴는 장바구니에서 확인할 수 있어요.</T>
       </Card>;
-      if (cartQuote && s.payment?.state === (s.flow === 'P02-C' ? 'cancelled' : 'failed')) {
+      if (!s.order && cartQuote && s.payment?.state === (s.flow === 'P02-C' ? 'cancelled' : 'failed')) {
         primary = { label: `다시 결제하기 · ${money(cartQuote.total)}`, run: () => d({ type: 'RETRY_CHECKOUT', key: key() }) };
       }
-      secondary = [{ label: '장바구니로 돌아가기', run: () => d({ type: 'RETRY_PAYMENT' }) }];
+      secondary = [{ label: s.order ? '진행 중인 주문 보기' : '장바구니로 돌아가기', run: () => d({ type: 'RETRY_PAYMENT' }) }];
       break;
     case 'P01-E2':
     case 'P02-T':
@@ -1337,15 +1384,24 @@ export default function App() {
         </Card>
       );
       primary = {
-        label: '장바구니로 돌아가기',
+        label: s.order ? '진행 중인 주문 보기' : '장바구니로 돌아가기',
         run: () => d({ type: 'RETRY_PAYMENT' }),
       };
       break;
     case 'P02-V':
+      if (s.recoveryRequired) {
+        body = <Card>
+          <T>저장된 결제 또는 주문 정보를 읽을 수 없어요. 새로 결제하기 전에 기존 결제 내역을 확인하고 직원에게 문의해 주세요.</T>
+          {s.payment && <Receipt value={s.payment.snapshot} products={s.products} />}
+        </Card>;
+        if (s.order) primary = { label: '저장된 주문 정보 보기', run: () => nav('V5-11') };
+        break;
+      }
       body = (
         <>
           <Card>
-            <T>{s.message || '서버에 결제 상태를 확인하고 있어요.'}</T>
+            <T>{app.busy ? '결제 상태를 확인하고 있어요.' :
+              s.message || '이전 결제의 결과를 다시 확인해 주세요.'}</T>
             <T>
               결제 결과가 확인되지 않았다면 새로 결제하지 말고 결과를 다시
               확인해 주세요.
@@ -1354,9 +1410,9 @@ export default function App() {
           {s.payment && <Receipt value={s.payment.snapshot} products={s.products} />}
         </>
       );
-      primary = { label: '결제 결과 다시 확인', run: () => nav('P02-V') };
+      primary = { label: '결제 결과 다시 확인', run: () => nav('P02-V'), disabled: app.busy };
       secondary =
-        s.payment?.state === 'ready'
+        s.payment?.state === 'ready' && !s.error && !app.busy && paymentMatchesRequest(s.payment, s.request)
           ? [
               {
                 label: '기존 결제 이어하기',
@@ -1398,11 +1454,12 @@ export default function App() {
       };
       break;
     case 'V5-11': {
-      const ready = s.order?.status === 'ready';
+      const ready = s.orderStatusChecked && s.order?.status === 'ready';
       const currentStep = ready ? 3 : s.order?.status === 'received' ? 1 : 2;
       body = s.order && (
         <>
           {subtitle(`${s.order.snapshot.storeName} · 주문번호`)}
+          {!!s.queuedOrders?.length && <T>이 주문을 픽업하면 다른 진행 중 주문을 확인할 수 있어요.</T>}
           <T
             style={{
               fontSize: 60 * theme.scale,
@@ -1412,7 +1469,11 @@ export default function App() {
           >
             {s.order.number}
           </T>
-          <Card compact>
+          {!s.orderStatusChecked && !s.message && (
+            <T>{s.recoveryRequired ? '저장된 주문 정보예요. 현재 준비 상태는 매장에 확인해 주세요.' :
+              '주문의 최신 상태를 확인하고 있어요.'}</T>
+          )}
+          {s.orderStatusChecked && <Card compact>
             {['주문 전달', '접수 완료', '준비 중', '픽업 가능'].map(
               (label, i) => {
                 const active = i === currentStep;
@@ -1471,7 +1532,7 @@ export default function App() {
                 );
               },
             )}
-          </Card>
+          </Card>}
           <Card compact>
             <InfoRow
               icon="cup"
@@ -1535,13 +1596,19 @@ export default function App() {
       primary = {
         label: '주문번호 다시 듣기',
         run: () => app.speak(`주문번호 ${s.order?.number || ''}`),
+        disabled: app.busy,
       };
       secondary = [
         {
           label: '픽업 완료',
-          run: () => d({ type: 'PICKUP_COMPLETE' }),
+          run: app.finishPickup,
+          disabled: app.busy,
         },
       ];
+      break;
+    case 'V5-13':
+      body = subtitle('이용해 주셔서 감사합니다.');
+      primary = { label: '새 주문 시작하기', run: () => d({ type: 'START_NEW_ORDER' }) };
       break;
     case 'SETTINGS':
       body = (
@@ -1550,7 +1617,7 @@ export default function App() {
           change={value => d({ type: 'SETTINGS', value })}
           replay={() => d({ type: 'REPLAY_TRAINING' })}
           chooseDiscovery={() => nav('START')}
-          canChooseDiscovery={!s.request && !s.payment}
+          canChooseDiscovery={!s.request && !s.payment && !s.order && !s.recoveryRequired}
         />
       );
       primary = { label: '설정 마치기', run: () => d({ type: 'BACK' }) };
@@ -1573,22 +1640,28 @@ export default function App() {
       ? 'alert'
       : s.flow === 'V5-04' || s.flow === 'V5-09'
       ? 'loading'
-      : s.flow === 'V5-10' || s.flow === 'V5-12'
+      : s.flow === 'V5-10' || s.flow === 'V5-12' || s.flow === 'V5-13'
       ? 'check'
       : undefined;
   const screenMessage =
     s.flow === 'P02-V' || s.flow === 'V5-05c' ? '' : s.message;
   // Waiting screens do not take focus (see above), so say what is happening.
   // Not while the browser's Bluetooth chooser is open on top of the page.
-  const waitingStatus =
-    ['V5-04', 'V5-09'].includes(s.flow)
-      ? title
-      : '';
-  const statusMessage = app.listening ? '듣고 있어요. 찾을 이름을 말해 주세요.' : searchStatus || waitingStatus || s.notice || screenMessage;
+  const waitingStatus = ['V5-04', 'V5-09'].includes(s.flow) ? title :
+    s.flow === 'P02-V' && app.busy ? '결제 상태를 확인하고 있어요.' : '';
+  const hideBack = ['BOOT', 'START', 'V5-O1', 'V5-09', 'P02-V', 'V5-10', 'V5-13'].includes(s.flow) ||
+    (['PAYMENT_EXTERNAL', 'V5-12'].includes(s.flow) && app.busy);
+  const hideSettings = ['SETTINGS', 'V5-09', 'PAYMENT_EXTERNAL', 'P02-V', 'V5-13'].includes(s.flow) ||
+    (s.flow === 'V5-12' && app.busy);
+  const showStaffHelp = s.settings.staffHelp && s.flow !== 'V5-13';
+  const alertText = s.error === 'CHANGE_STORE' ? '' : s.error || s.storageNotice;
+  const statusMessage = app.listening
+    ? '듣고 있어요. 찾을 이름을 말해 주세요.'
+    : searchStatus || waitingStatus || s.notice || screenMessage;
   return (
     <ThemeContext.Provider value={theme}>
       <div className="visually-hidden" role="alert">
-        {s.error !== 'CHANGE_STORE' ? s.error : ''}
+        {alertText}
       </div>
       <div className="visually-hidden" role="status">
         {statusMessage || (typingScreen === screenKey && !s.error && !s.spokenQuery && typedResultMessage &&
@@ -1598,7 +1671,7 @@ export default function App() {
       {/* On entry screens a fresh frame starts sequential navigation at the top. */}
       <div key={screenKey} className={`app-frame${entryScreen ? ' entry-frame' : ''}`} data-flow={s.flow} style={{ backgroundColor: theme.bg, color: theme.text, '--page': theme.bg, '--card': theme.card, '--divider': s.settings.dark ? theme.line : '#DCDDE2', '--muted': theme.muted, '--line': theme.line, '--scale': theme.scale, '--gutter': theme.compact ? '12px' : '20px' } as React.CSSProperties}>
         <View style={[st.header, { borderBottomWidth: 1.5, borderColor: titleScrolled ? (s.settings.dark ? theme.line : '#E1E2E6') : 'transparent' }]}>
-          {!['BOOT', 'START', 'V5-O1'].includes(s.flow) && (
+          {!hideBack && (
             <button
               type="button"
               className="app-button header-button"
@@ -1612,7 +1685,7 @@ export default function App() {
           )}
           {/* Leave room for the navigation buttons when zoomed in or using large text. */}
           <div className="compact-title" aria-hidden="true">{titleScrolled && !theme.compact ? shortTitle : ''}</div>
-          {s.flow !== 'SETTINGS' && (
+          {!hideSettings && (
             <button
               type="button"
               className="app-button header-button"
@@ -1636,14 +1709,13 @@ export default function App() {
               <h1 ref={heading} className="section-heading" style={{ fontSize: 26 * theme.scale }}>
                 {title}
               </h1>
-              {!!s.error &&
-                s.error !== 'CHANGE_STORE' &&
-                !['E01', 'E02', 'E04', 'E05'].includes(s.flow) && (
+              {!!alertText &&
+                (!s.error || !['E01', 'E02', 'E04', 'E05'].includes(s.flow)) && (
                   <View>
                     <T
                       style={{ color: s.settings.dark ? '#FFADB3' : theme.danger }}
                     >
-                      {s.error}
+                      {alertText}
                     </T>
                   </View>
                 )}
@@ -1665,7 +1737,7 @@ export default function App() {
           </div>
           {hasMore && <div aria-hidden="true" className="more-hint"><span>아래에 더 있어요</span></div>}
         </div>
-        {(cartScreen || primary || (pinSecondary && secondary.length > 0) || s.settings.staffHelp) && <div className="fixed-footer" data-testid="fixed-footer">
+        {(cartScreen || primary || (pinSecondary && secondary.length > 0) || showStaffHelp) && <div className="fixed-footer" data-testid="fixed-footer">
           {cartScreen ? (
             <CartBar
               testID="primary-action"
@@ -1695,9 +1767,10 @@ export default function App() {
                 disabled={b.disabled}
               />
             ))}
-          {s.settings.staffHelp && <Button
+          {showStaffHelp && <Button
             appearance="utility"
             label="직원 도움"
+            disabled={s.flow === 'V5-12' && app.busy}
             icon={<Icon name="staff" size={24} color={theme.text} />}
             onPress={help}
           />}
@@ -1707,9 +1780,9 @@ export default function App() {
     </ThemeContext.Provider>
   );
 }
-// A row that shows or hides the items under it ("자주 시킨 메뉴"). A real
+// A row that shows or hides the items from the most recent order. A real
 // button with aria-expanded, so a screen reader reads the whole row as one
-// item: "자주 시킨 메뉴 2개, 축소됨". The <details>/<summary> it replaces was
+// item: "최근 주문 메뉴 2개, 축소됨". The <details>/<summary> it replaces was
 // read in pieces on iPhone.
 function Foldable({ label, children }: { label: string; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -1803,7 +1876,7 @@ function SettingsPanel({
           </span>
         </button>
       ))}
-      <Button label="사용법 다시 듣기" onPress={replay} />
+      <Button label="사용법 다시 듣기" onPress={replay} disabled={!canChooseDiscovery} />
       <Button label="매장 찾기 방식 선택" onPress={chooseDiscovery} disabled={!canChooseDiscovery} />
     </>
   );

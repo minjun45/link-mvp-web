@@ -59,6 +59,16 @@ test('only the demo scanner displays and announces its eight-second wait', () =>
   }
 });
 
+test('reopened store search keeps its results without replaying a typed announcement', () => {
+  const query = '카페';
+  const html = render('V5-02s', { query });
+  const count = catalog.stores.filter(store => store.name.includes(query)).length;
+  expect(count).toBeGreaterThan(0);
+  expect(html).toMatch(new RegExp('<h2 id="search-results"[^>]*>검색 결과 · ' + count + '곳<\\/h2>'));
+  expect(html).toContain('role="status"></div>');
+  expect(html).toMatch(/<span aria-hidden="true">⚙ <\/span>접근성 설정/);
+});
+
 test('settings keeps user preferences and navigation without automatic speech or developer tools', () => {
   const html = render('SETTINGS');
   expect(html).toMatch(/<h1\b[^>]*>접근성 설정<\/h1>/);

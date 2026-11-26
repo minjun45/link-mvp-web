@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from 'vitest';
-import { chooseBeacon, inspectBeacon } from '../src/native/browserDevice';
+import { chooseBeacon, inspectBeacon, recognize } from '../src/native/browserDevice';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -36,4 +36,27 @@ test('unsupported browsers get a useful error', async () => {
   adapter();
   vi.stubGlobal('navigator', {});
   await expect(inspectBeacon()).rejects.toThrow('노트북 Chrome');
+});
+
+test('cancelling speech recognition releases the first session and the next one gets its own result', async () => {
+  const sessions: Recognition[] = [];
+  class Recognition {
+    onresult?: (event: { results: { transcript: string }[][] }) => void;
+    onend?: () => void;
+    abort = vi.fn(() => this.onend?.());
+    start() {
+      sessions.push(this);
+    }
+  }
+  vi.stubGlobal('window', { SpeechRecognition: Recognition });
+  const first = new AbortController();
+  const firstResult = recognize(first.signal);
+  first.abort();
+  expect(sessions[0].abort).toHaveBeenCalledOnce();
+  await expect(firstResult).resolves.toBe('');
+
+  const secondResult = recognize(new AbortController().signal);
+  sessions[0].onresult?.({ results: [[{ transcript: '이전 검색' }]] });
+  sessions[1].onresult?.({ results: [[{ transcript: '라떼' }]] });
+  await expect(secondResult).resolves.toBe('라떼');
 });

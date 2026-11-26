@@ -171,7 +171,7 @@ test('09: a recent item opens the normal option screen with its saved options', 
     quantity: 1,
   });
 });
-test('pickup returns to discovery choices without losing order history', () => {
+test('pickup displays confirmation before explicitly returning to discovery choices and keeps order history', () => {
   const last = { ...order(cart()), status: 'ready' as const };
   const pickup: State = {
     ...menu(),
@@ -180,21 +180,27 @@ test('pickup returns to discovery choices without losing order history', () => {
     order: last,
     history: { [stores[0].id]: last },
   };
-  const reset = reduce(pickup, { type: 'PICKUP_COMPLETE' });
-  expect(reset).toMatchObject({
-    flow: 'START',
+  const finished = reduce(pickup, { type: 'PICKUP_COMPLETE' });
+  expect(finished).toMatchObject({
+    flow: 'V5-13',
     onboarded: true,
     history: pickup.history,
     order: undefined,
     backStack: [],
   });
+  expect(reduce(finished, { type: 'BACK' })).toBe(finished);
+  expect(reduce(finished, { type: 'NAV', flow: 'V5-12' })).toBe(finished);
+  expect(reduce(finished, { type: 'PICKUP_COMPLETE' })).toBe(finished);
+  expect(reduce(finished, { type: 'ORDER_UPDATED', order: last })).toBe(finished);
+  const reset = reduce(finished, { type: 'START_NEW_ORDER' });
+  expect(reset.flow).toBe('START');
   expect(reduce(reset, { type: 'DISCOVER', demo: true })).toMatchObject({
     flow: 'V5-01',
     discovery: 'demo',
   });
   expect(
     reduce({ ...pickup, discovery: 'ble' }, { type: 'PICKUP_COMPLETE' }).flow,
-  ).toBe('START');
+  ).toBe('V5-13');
 });
 test('08: quick defaults is an opt-in path; many options use wizard and summary', () => {
   let s = reduce(
@@ -241,7 +247,8 @@ test('payment success remains on explicit V5-10 until user opens order status', 
     snapshot: o.snapshot,
     orderId: o.id,
   };
-  let s = reduce(original, { type: 'PAYMENT_RESULT', payment, order: o });
+  const checkout = reduce(original, { type: 'CHECKOUT', key: 'payment-success' });
+  let s = reduce(checkout, { type: 'PAYMENT_RESULT', payment, order: o });
   expect(s.flow).toBe('V5-10');
   expect(s.cart).toHaveLength(0);
   s = reduce(s, { type: 'ORDER_UPDATED', order: { ...o, status: 'ready' } });
@@ -276,7 +283,7 @@ test('price changes interrupt payment; cancellation retains cart and uncertain v
     provider: 'offline',
     snapshot: quote(stores[0], products, s.cart),
   };
-  s = { ...s, flow: 'P02-V' };
+  s = { ...s, flow: 'P02-V', payment };
   const next = reduce(s, { type: 'PAYMENT_RESULT', payment });
   expect(next.revision).toBe(s.revision);
   expect(

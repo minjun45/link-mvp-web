@@ -1,4 +1,4 @@
-import type { Store, Product, Line, Quote, Order } from './types';
+import type { Store, Product, Line, Quote, Order, Payment, Request } from './types';
 export const key = () =>
   `link_${Date.now().toString(36)}_${Math.random()
     .toString(36)
@@ -71,6 +71,9 @@ export const sameQuote = (a: Quote, b: Quote) =>
       Object.entries(x.options).every(([k, v]) => y.options[k] === v)
     );
   });
+export const paymentMatchesRequest = (payment: Payment, request?: Request) =>
+  !request || sameQuote(payment.snapshot, request.expected);
+
 export const status = (created: number, now = Date.now()): Order['status'] =>
   now - created < 8000
     ? 'received'
@@ -92,7 +95,7 @@ export const fromOrder = (o: Order): Line[] =>
     quantity: i.quantity,
     options: { ...i.options },
   }));
-export function frequent(history: Order | undefined, products: Product[]) {
+export function recentOrderProducts(history: Order | undefined, products: Product[]) {
   return [...new Set(history?.snapshot.items.map(l => l.productId) || [])]
     .map(id => products.find(p => p.id === id))
     .filter((p): p is Product => !!p && !p.soldOut)

@@ -8,11 +8,11 @@ import catalog from '../src/data/catalog.json';
 import App from '../App';
 import { Icon, Photo } from '../src/ui/figma';
 
-const mock = vi.hoisted(() => ({ state: null as State | null }));
+const mock = vi.hoisted(() => ({ state: null as State | null, listening: false }));
 vi.mock('../src/services/useApp', () => ({
   useApp: () => ({
-    s: mock.state, dispatch: vi.fn(), busy: false, speak: vi.fn(),
-    discover: vi.fn(), voiceSearch: vi.fn(), complete: vi.fn(),
+    s: mock.state, dispatch: vi.fn(), busy: false, listening: mock.listening, speak: vi.fn(),
+    discover: vi.fn(), voiceSearch: vi.fn(), cancelVoiceSearch: vi.fn(), complete: vi.fn(), finishPickup: vi.fn(),
   }),
 }));
 vi.mock('../src/native/browserDevice', () => ({ canChooseBeacon: () => true }));
@@ -211,7 +211,7 @@ test('category bar of the grouped menu is a set of jump buttons, the group in vi
   expect(html).toMatch(/<section class="menu-group" data-group="1">/);
 });
 
-test('frequent menu row is one button that says how many and whether it is open', () => {
+test('recent order menu row is one button that says how many and whether it is open', () => {
   const lemon = product('레몬에이드');
   const history = {
     [catalog.stores[0].id]: {
@@ -221,6 +221,59 @@ test('frequent menu row is one button that says how many and whether it is open'
     },
   };
   const html = render('V5-05', { history });
-  expect(html).toMatch(/<button type="button" class="frequent-toggle" aria-expanded="false">자주 시킨 메뉴 1개<span aria-hidden="true"><\/span><\/button>/);
+  expect(html).toMatch(/<button type="button" class="frequent-toggle" aria-expanded="false">최근 주문 메뉴 1개<span aria-hidden="true"><\/span><\/button>/);
   expect(html).not.toContain('<summary');
+});
+
+test.each(['V5-09', 'P02-V', 'V5-10'] as const)('screen %s omits the unusable in-app Back action', flow => {
+  expect(render(flow)).not.toMatch(/>뒤로<\//);
+});
+
+test('pickup confirmation has a single heading and native action with large text and contrast', () => {
+  const html = render('V5-13', { settings: { ...initial.settings, staffHelp: true, large: true, contrast: true } });
+  expect(html).toMatch(/<h1[^>]*>픽업을 완료했어요<\/h1>/);
+  expect(html.match(/픽업을 완료했어요/g)).toHaveLength(1);
+  expect(html.match(/이용해 주셔서 감사합니다\./g)).toHaveLength(1);
+  expect(html).toContain('role="status"></div>');
+  expect(html).toMatch(/<button type="button"[^>]*data-testid="primary-action"[^>]*>[\s\S]*?새 주문 시작하기/);
+  expect(html).not.toMatch(/>뒤로<\/|직원 도움|주문번호|다시 듣기/);
+});
+
+test('a locked payment keeps recovery instructions visible and cannot resume or retry', () => {
+  const html = render('P02-V', { recoveryRequired: true });
+  expect(html).toContain('기존 결제 내역을 확인');
+  expect(html).not.toContain('결제 결과 다시 확인');
+  expect(html).not.toContain('기존 결제 이어하기');
+});
+
+test('menu pagination names the actual remaining count', () => {
+  const results = Array.from({ length: 7 }, (_, index) => ({
+    ...products[0], id: `latte-${index}`, name: `카페라테 ${index}`,
+  }));
+  const html = render('V5-05', { products: results, query: '라떼', menuLimit: 5 });
+  expect(html).toContain('메뉴 2개 더 보기');
+  expect(html).not.toContain('더 듣기');
+  expect(render('V5-05', { products: results, query: '라떼', menuLimit: 10 })).not.toContain('더 보기');
+});
+
+test('typed menu results restored by navigation do not repeat the spoken announcement', () => {
+  const spoken = render('V5-05', { query: '라떼', spokenQuery: true });
+  expect(spoken).toMatch(/<h2 id="search-results"[^>]*>‘라떼’ 검색 결과 · 2개<\/h2>/);
+  expect(spoken).toContain('role="status"></div>');
+  const restored = render('V5-05', { query: '라떼', spokenQuery: false });
+  expect(restored).toMatch(/<h2 id="search-results"[^>]*>검색 결과 · 2개<\/h2>/);
+  expect(restored).toContain('role="status"></div>');
+  expect(restored).not.toContain('‘라떼’ 검색 결과');
+});
+
+test('listening offers an explicit voice cancellation and one status announcement', () => {
+  mock.listening = true;
+  try {
+    const html = render('V5-05', { query: '라떼' });
+    expect(html).toContain('음성 검색 취소');
+    expect(html).toContain('role="status">듣고 있어요. 찾을 이름을 말해 주세요.</div>');
+    expect(html.match(/듣고 있어요\. 찾을 이름을 말해 주세요\./g)).toHaveLength(1);
+  } finally {
+    mock.listening = false;
+  }
 });
