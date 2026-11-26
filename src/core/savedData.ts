@@ -68,6 +68,11 @@ export function isPayment(value: unknown): value is Payment {
     (value.redirect == null || isString(value.redirect)) &&
     (value.failureReason === undefined ||
       (value.failureReason === 'preparation' && value.state === 'failed' && value.provider === KAKAO_TEST_PROVIDER)) &&
+    (value.cartReturnAvailable === undefined || (typeof value.cartReturnAvailable === 'boolean' &&
+      value.provider === KAKAO_TEST_PROVIDER && (value.state === 'ready' || value.state === 'review'))) &&
+    (value.returnedToCart === undefined ||
+      (value.returnedToCart === true && value.state === 'cancelled' && value.provider === KAKAO_TEST_PROVIDER &&
+        value.orderId === undefined && value.redirect == null)) &&
     (value.checkoutAvailable === undefined || (isRecord(value.checkoutAvailable) &&
       typeof value.checkoutAvailable.pc === 'boolean' && typeof value.checkoutAvailable.mobile === 'boolean')) &&
     (value.created === undefined || isAmount(value.created));

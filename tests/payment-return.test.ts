@@ -258,10 +258,10 @@ test('rejects a queued write from a frozen page and restores the latest complete
   expect(restored).toMatchObject({ payment: undefined, request: undefined, flow: 'START', revision: state.revision + 1 });
 });
 
-test('retains the current focus revision for identical reads and moves only on a confirmed terminal result', () => {
+test('retains focus for identical reads and moves to recovery or a confirmed terminal screen when needed', () => {
   expect(reduce(state, { type: 'PAYMENT_RESULT', payment: { ...payment } })).toBe(state);
   const uncertain = reduce(state, { type: 'PAYMENT_RESULT', payment: { ...payment, state: 'review' } });
-  expect(uncertain).toMatchObject({ flow: state.flow, revision: state.revision, payment: { state: 'review' } });
+  expect(uncertain).toMatchObject({ flow: 'P02-V', revision: state.revision + 1, payment: { state: 'review' } });
   expect(reduce(uncertain, { type: 'PAYMENT_RESULT', payment: { ...payment, state: 'review' } })).toBe(uncertain);
   expect(reduce(state, { type: 'PAYMENT_RESULT', payment: { ...payment, state: 'cancelled' } }).flow).toBe('P02-C');
   expect(reduce(state, { type: 'PAYMENT_RESULT', payment: { ...payment, state: 'failed' } }).flow).toBe('P02-F');

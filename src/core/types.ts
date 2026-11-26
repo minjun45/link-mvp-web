@@ -78,6 +78,8 @@ export type Payment = {
   orderId?: string;
   redirect?: string | null;
   failureReason?: 'preparation';
+  cartReturnAvailable?: boolean;
+  returnedToCart?: true;
   checkoutAvailable?: { pc: boolean; mobile: boolean };
   created?: number;
 };

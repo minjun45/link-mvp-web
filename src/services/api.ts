@@ -208,8 +208,9 @@ export async function prepare(s: Connection, r: Request): Promise<Payment> {
   });
 }
 const kakaoReads = new Map<string, Promise<Payment>>();
-export async function getPayment(s: Connection, id: string): Promise<Payment> {
+export async function getPayment(s: Connection, id: string, fresh = false): Promise<Payment> {
   const path = `/payments/${encodeURIComponent(id)}`;
+  if (fresh && s.mode === KAKAO_TEST_PROVIDER) return http(s, path);
   if (s.mode === KAKAO_TEST_PROVIDER) {
     const key = s.serverUrl + path;
     const pending = kakaoReads.get(key);
@@ -230,6 +231,10 @@ export async function getPayment(s: Connection, id: string): Promise<Payment> {
     return p;
   });
 }
+export function closeKakaoCheckout(s: Extract<Connection, { mode: typeof KAKAO_TEST_PROVIDER }>, id: string) {
+  return http<Payment>(s, `/payments/${encodeURIComponent(id)}/return-to-cart`, {});
+}
+
 export async function complete(
   s: Connection,
   id: string,

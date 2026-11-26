@@ -1,6 +1,6 @@
 import { paymentMatchesRequest, sameQuote } from '../core/domain';
 import { snapshot, type Action } from '../core/flow';
-import { isOrder, isPayment } from '../core/savedData';
+import { isOrder, isPayment, isRecord } from '../core/savedData';
 import { KAKAO_TEST_PROVIDER, type Connection, type Payment, type State } from '../core/types';
 import * as api from './api';
 import { persist, SnapshotConflict } from './storage';
@@ -52,7 +52,44 @@ export async function openKakaoCheckout(
   }
 }
 
-export async function paymentResult(connection: Connection, payment: Payment): Promise<Action> {
+function normalizeKakaoPayment(response: unknown): unknown {
+  // An earlier server can expose the internal terminal state after a server rollback.
+  if (isRecord(response) && response.state === 'abandoned')
+    return { ...response, state: 'cancelled', returnedToCart: true };
+  return response;
+}
+
+type PaymentResult = Extract<Action, { type: 'PAYMENT_RESULT' }>;
+
+export async function returnKakaoPaymentToCart(state: State, isCurrent: () => boolean): Promise<PaymentResult | undefined> {
+  const original = state.payment;
+  const connection = original?.connection ?? state.request?.connection;
+  if (state.recoveryRequired || !original || original.provider !== KAKAO_TEST_PROVIDER ||
+      connection?.mode !== KAKAO_TEST_PROVIDER || !paymentMatchesRequest(original, state.request)) return;
+
+  const { id, snapshot: originalQuote } = original;
+  function checked(response: unknown): Payment {
+    const payment = normalizeKakaoPayment(response);
+    if (!isPayment(payment) || payment.id !== id || payment.provider !== KAKAO_TEST_PROVIDER ||
+        !sameQuote(payment.snapshot, originalQuote))
+      throw new Error('같은 결제의 결과를 확인하지 못했어요.');
+    return { ...payment, connection };
+  }
+
+  let payment: Payment;
+  try {
+    payment = checked(await api.closeKakaoCheckout(connection, id));
+  } catch (error) {
+    if (!isCurrent()) return;
+    // A lost response or an older server can only be reconciled with the same payment ID.
+    payment = checked(await api.getPayment(connection, id, true));
+    if (!['approved', 'cancelled', 'failed', 'expired'].includes(payment.state)) throw error;
+  }
+  if (!isCurrent()) return;
+  return { ...await paymentResult(connection, payment), returnToCart: true };
+}
+
+export async function paymentResult(connection: Connection, payment: Payment): Promise<PaymentResult> {
   if (payment.state !== 'approved') return { type: 'PAYMENT_RESULT', payment };
   try {
     if (!payment.orderId) throw new Error('아직 주문번호를 확인할 수 없어요.');
@@ -86,9 +123,10 @@ export async function advancePayment(
   }
 
   function checkedPayment(response: unknown, id?: string): Payment {
-    if (!isPayment(response) || (id && response.id !== id) || (kakao && response.provider !== KAKAO_TEST_PROVIDER))
+    const payment = kakao ? normalizeKakaoPayment(response) : response;
+    if (!isPayment(payment) || (id && payment.id !== id) || (kakao && payment.provider !== KAKAO_TEST_PROVIDER))
       throw new Error('같은 결제의 결과를 확인하지 못했어요.');
-    return pinned ? { ...response, connection: pinned } : response;
+    return pinned ? { ...payment, connection: pinned } : payment;
   }
 
   async function storeBeforeOpening(payment: Payment) {

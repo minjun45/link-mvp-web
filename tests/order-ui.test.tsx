@@ -13,7 +13,7 @@ vi.mock('../src/services/useApp', () => ({
   useApp: () => ({
     s: mock.state, dispatch: vi.fn(), busy: false, listening: mock.listening, speak: vi.fn(),
     discover: vi.fn(), voiceSearch: vi.fn(), cancelVoiceSearch: vi.fn(), complete: vi.fn(), finishPickup: vi.fn(),
-    kakaoCheckStatus: mock.kakaoCheckStatus, checkKakaoPayment: vi.fn(),
+    kakaoCheckStatus: mock.kakaoCheckStatus, checkKakaoPayment: vi.fn(), returnKakaoToCart: vi.fn(),
   }),
 }));
 vi.mock('../src/native/browserDevice', () => ({ canChooseBeacon: () => true }));
@@ -78,15 +78,45 @@ test('announces distinct checking, unchanged and unavailable results without off
     checkoutAvailable: { pc: false, mobile: false },
   };
   const html = render('P02-V', { payment }, 'checking');
-  expect(html).toContain('결제 결과를 확인하고 있어요.');
-  const checkButton = html.match(/<button[^>]*>[\s\S]*?<\/button>/g)?.find(button => button.includes('결제 결과 다시 확인'));
-  expect(checkButton).toBeDefined();
-  expect(checkButton).not.toMatch(/disabled/);
-  expect(render('P02-V', { payment }, 'checked')).toContain('결제 결과를 확인했지만 아직 확정되지 않았어요.');
-  expect(render('P02-V', { payment }, 'unavailable')).toContain('연결을 확인하고 다시 시도해 주세요.');
-  expect(render('P02-V', { payment, error: '서버 연결을 확인해 주세요.' }, 'checked')).toContain('서버 연결을 확인해 주세요.');
-  expect(html).not.toMatch(/이 기기에서|다시 결제하기|장바구니로 돌아가기/);
-  expect(render('P02-V', { payment }, 'checked')).not.toContain('이 기기에서');
+  expect(html).toMatch(/<h1[^>]*aria-live="polite">결제 결과를 확인하고 있어요<\/h1>/);
+  expect(html).toContain('잠시만 기다려 주세요.');
+  expect(html).not.toMatch(/결제 결과 다시 확인|다시 결제하기|장바구니로 돌아가기/);
+  for (const mode of ['checked', 'unavailable']) {
+    const uncertain = render('P02-V', { payment }, mode);
+    expect(uncertain).toMatch(/<h1[^>]*>아직 결제 결과를 확인하지 못했어요<\/h1>/);
+    expect(uncertain).toContain('중복 결제를 막기 위해 결제 결과를 먼저 확인해 주세요.');
+    expect(uncertain).toMatch(/<button[^>]*>[\s\S]*?결제 결과 다시 확인[\s\S]*?<\/button>/);
+    expect(uncertain).not.toMatch(/이 기기에서|아직 결제하지 않았어요|결제 계속하기|장바구니로 돌아가기/);
+  }
+  const oldReady = { ...payment, state: 'ready' as const, redirect: KAKAO_TEST_ORIGIN + '/checkout/old-preparation' };
+  expect(render('P02-V', { payment: oldReady, error: '서버 연결을 확인해 주세요.' }, 'unavailable'))
+    .not.toContain('아직 결제하지 않았어요');
+});
+
+test('confirmed unpaid checkout presents only actions supported by the verified transaction', () => {
+  const payment = {
+    id: 'ready-kakao', provider: KAKAO_TEST_PROVIDER, state: 'ready' as const,
+    snapshot: quote(catalog.stores[0], products, [{ id: 'line', productId: products[0].id, options: defaults(products[0]), quantity: 2 }]),
+    connection: { mode: KAKAO_TEST_PROVIDER, serverUrl: KAKAO_TEST_ORIGIN } as const,
+    redirect: KAKAO_TEST_ORIGIN + '/checkout/ready-kakao', cartReturnAvailable: true,
+  };
+  const external = render('PAYMENT_EXTERNAL', { payment });
+  expect(external).toContain('카카오페이 결제하기');
+  expect(external).toContain('장바구니로 돌아가기');
+  expect(external).not.toContain('결제 결과 확인');
+  const verified = render('P02-V', { payment }, 'checked');
+  expect(verified).toMatch(/<h1[^>]*>아직 결제하지 않았어요<\/h1>/);
+  expect(verified).toContain('결제 계속하기');
+  expect(verified).toContain('장바구니로 돌아가기');
+  expect(verified).not.toMatch(/결제 결과 다시 확인|기존 결제 이어하기|결제 중단하기/);
+  const withoutLink = render('P02-V', { payment: { ...payment, state: 'review', redirect: null } }, 'checked');
+  expect(withoutLink).toContain('아직 결제하지 않았어요');
+  expect(withoutLink).toContain('장바구니로 돌아가기');
+  expect(withoutLink).not.toContain('결제 계속하기');
+  const olderServer = render('P02-V', { payment: { ...payment, cartReturnAvailable: undefined } }, 'checked');
+  expect(olderServer).toContain('결제 계속하기');
+  expect(olderServer).not.toContain('장바구니로 돌아가기');
+  expect(render('P02-V', { payment }, 'idle')).not.toContain('장바구니로 돌아가기');
 });
 
 test('preparation failure explains what happened and offers the cart without a blind retry', () => {

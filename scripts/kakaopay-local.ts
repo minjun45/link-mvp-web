@@ -135,7 +135,7 @@ export function createKakaoPayLocalServer({
   const gate = qa && !publicAccess ? qaAccess(qa.accessKey, now) : undefined;
   const sessionCookie = qa ? '__Host-link_kakaopay_session' : COOKIE;
   const provider = createKakaoPayClient(options);
-  const checks = new Map<string, Promise<void>>();
+  const checks = new Map<string, Promise<boolean>>();
   const preparing = new Set<string>();
   const appPage = distDir
     ? readFileSync(join(distDir, 'index.html'), 'utf8').replace('<head>', '<head><meta name="link-kakaopay-test" content="enabled">')
@@ -170,14 +170,22 @@ export function createKakaoPayLocalServer({
     return tx;
   }
 
-  function view(tx: DatabasePayment): Payment {
-    const state = tx.state === 'preparing' || (tx.state === 'ready' && now() - tx.created >= READY_WINDOW_MS)
-      ? 'review' : tx.state;
+  function canReturnToCart(tx: DatabasePayment) {
+    return (tx.state === 'ready' || tx.state === 'review') && !!tx.tid &&
+      !tx.attempted && !tx.aid && !tx.mismatch && !tx.orderId && now() - tx.created < READY_WINDOW_MS;
+  }
+
+  function view(tx: DatabasePayment, cartReturnAvailable = false): Payment {
+    const state = tx.state === 'abandoned' ? 'cancelled' :
+      tx.state === 'preparing' || (tx.state === 'ready' && now() - tx.created >= READY_WINDOW_MS)
+        ? 'review' : tx.state;
     const preparationFailed = state === 'failed' && tx.attempted === 0 && tx.aid === null &&
       tx.mismatch === 0 && !tx.orderId && (tx.tid === null || (tx.pc === null && tx.mobile === null));
     return {
       id: tx.id, state, provider: KAKAO_TEST_PROVIDER, snapshot: JSON.parse(tx.snapshot) as Quote,
       ...(preparationFailed ? { failureReason: 'preparation' as const } : {}),
+      ...(tx.state === 'abandoned' ? { returnedToCart: true as const } : {}),
+      ...(cartReturnAvailable && canReturnToCart(tx) ? { cartReturnAvailable: true } : {}),
       created: tx.created, orderId: tx.orderId ?? undefined,
       redirect: state === 'ready' ? `${origin}/checkout/${tx.id}` : undefined,
       checkoutAvailable: { pc: !!kakaoRedirect(tx.pc), mobile: !!kakaoRedirect(tx.mobile) },
@@ -189,8 +197,8 @@ export function createKakaoPayLocalServer({
     return { orderId: tx.id, userId: tx.userId, item: tx.item, total: snapshot.total, quantity: snapshot.quantity };
   }
 
-  async function verify(tx: DatabasePayment, pgToken?: string) {
-    if (!tx.tid || !['ready', 'approving', 'review'].includes(tx.state)) return;
+  async function verify(tx: DatabasePayment, pgToken?: string, returnToCart = false) {
+    if (!tx.tid || !['ready', 'approving', 'review'].includes(tx.state)) return false;
     const known = { ...trade(tx), tid: tx.tid };
     if (pgToken && !tx.attempted && now() - tx.created < READY_WINDOW_MS) {
       let release: (() => void) | undefined;
@@ -213,7 +221,7 @@ export function createKakaoPayLocalServer({
       }
     }
     const saved = database.byId(tx.owner, tx.id);
-    if (!saved || !['ready', 'approving', 'review'].includes(saved.state)) return;
+    if (!saved || !['ready', 'approving', 'review'].includes(saved.state)) return false;
     const release = gatewaySlot('inquiry', tx.owner);
     const outcome = await provider.order(known, saved.aid ?? undefined).finally(release);
     if (outcome === 'approved' && saved.attempted && !saved.mismatch) {
@@ -225,27 +233,33 @@ export function createKakaoPayLocalServer({
       const unapproved = outcome === 'ready' || outcome === 'pending' || outcome === 'auth-failed';
       const checkedAt = now();
       if (unapproved && checkedAt - saved.created >= READY_WINDOW_MS + READY_EXPIRY_GRACE_MS &&
-          database.expireUnapproved(saved.id, known.tid, checkedAt)) return;
+          database.expireUnapproved(saved.id, known.tid, checkedAt)) return false;
+      if (returnToCart && unapproved && canReturnToCart(saved)) {
+        qa?.checkDisk();
+        if (database.abandonUnapproved(saved.owner, saved.id, known.tid, now)) return false;
+      }
       const canResume = (outcome === 'ready' || outcome === 'pending') && !!(saved.pc || saved.mobile) &&
         !saved.attempted && now() - saved.created < READY_WINDOW_MS && !pgToken;
       database.setOutcome(tx.id, canResume ? 'ready' : 'review');
+      return unapproved;
     }
+    return false;
   }
 
-  async function refresh(tx: DatabasePayment, pgToken?: string): Promise<void> {
+  async function refresh(tx: DatabasePayment, pgToken?: string, returnToCart = false): Promise<boolean> {
     const pending = checks.get(tx.id);
     if (pending) {
-      if (!pgToken) return pending;
-      // A failed inquiry must not discard a concurrently arriving approval token.
+      if (!pgToken && !returnToCart) return pending;
+      // After a competing check, use the latest transaction before an action.
       await pending.catch(() => {});
       const saved = database.byId(tx.owner, tx.id);
-      if (saved && !saved.attempted) await refresh(saved, pgToken);
-      return;
+      if (saved && (!pgToken || !saved.attempted)) return refresh(saved, pgToken, returnToCart);
+      return false;
     }
-    const next = verify(tx, pgToken);
+    const next = verify(tx, pgToken, returnToCart);
     checks.set(tx.id, next);
     try {
-      await next;
+      return await next;
     } finally {
       checks.delete(tx.id);
     }
@@ -302,7 +316,7 @@ export function createKakaoPayLocalServer({
         // The TID and usable URL reach durable storage before the checkout link is exposed.
         const result = await provider.ready(trade(tx), origin, tx.callbackId);
         database.storeReady(tx.id, result, now());
-        json(res, 200, view(database.byId(owner, tx.id)!));
+        json(res, 200, view(database.byId(owner, tx.id)!, true));
       } finally {
         preparing.delete(tx.id);
       }
@@ -450,8 +464,19 @@ export function createKakaoPayLocalServer({
         if (!tx) return error(res, 404, '결제 정보를 찾을 수 없어요.');
         const recovered = recoverUnopened(tx);
         if (recovered.state === 'failed') return json(res, 200, view(recovered));
-        await refresh(recovered);
-        return json(res, 200, view(database.byId(session.id, tx.id)!));
+        const unapproved = await refresh(recovered);
+        return json(res, 200, view(database.byId(session.id, tx.id)!, unapproved));
+      }
+      const returnPath = /^\/api\/payments\/([a-f0-9]{64})\/return-to-cart$/.exec(path);
+      if (req.method === 'POST' && returnPath) {
+        const body = await readInput(req);
+        if (!isRecord(body) || Object.keys(body).length)
+          return error(res, 400, '장바구니 복귀 요청을 확인해 주세요.');
+        const tx = database.byId(session.id, returnPath[1]);
+        if (!tx) return error(res, 404, '결제 정보를 찾을 수 없어요.');
+        // A live preparation is left alone. A closed transaction also answers repeat requests.
+        const unapproved = await refresh(tx, undefined, true);
+        return json(res, 200, view(database.byId(session.id, tx.id)!, unapproved));
       }
       const orderPath = /^\/api\/orders\/([a-f0-9]{64})$/.exec(path);
       if (req.method === 'GET' && orderPath) {

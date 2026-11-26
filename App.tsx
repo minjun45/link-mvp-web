@@ -101,6 +101,14 @@ export default function App() {
       (s.payment?.connection ?? s.request?.connection)?.mode === KAKAO_TEST_PROVIDER);
   const kakaoChannel = kakaoPaymentScreen ? paymentChannel(globalThis.navigator) : 'pc';
   const checkedKakaoPayment = app.kakaoCheckStatus === 'checked';
+  const checkingKakaoRecovery = app.kakaoCheckStatus === 'checking' ||
+    (app.kakaoCheckStatus === 'idle' && !!s.payment?.id && globalThis.navigator?.onLine !== false);
+  const canReturnKakaoCart = s.payment?.cartReturnAvailable === true && !s.recoveryRequired && !s.error;
+  const canContinueKakao = canOpenKakaoPayment(s, kakaoChannel);
+  const confirmedKakaoUnpaid = checkedKakaoPayment && !s.error &&
+    (s.payment?.state === 'ready' || canReturnKakaoCart);
+  const kakaoRecoveryTitle = checkingKakaoRecovery ? '결제 결과를 확인하고 있어요' :
+    confirmedKakaoUnpaid ? '아직 결제하지 않았어요' : '아직 결제 결과를 확인하지 못했어요';
   function kakaoPaymentMessage() {
     if (app.kakaoCheckStatus === 'checking') return '결제 결과를 확인하고 있어요.';
     if (app.kakaoCheckStatus === 'unavailable')
@@ -187,6 +195,7 @@ export default function App() {
   const groupName = wizardGroup?.name || '옵션';
   const title =
     kakaoPaymentScreen && s.flow === 'PAYMENT_EXTERNAL' ? '카카오페이로 결제해 주세요'
+      : kakaoPaymentScreen && s.flow === 'P02-V' && !s.recoveryRequired ? kakaoRecoveryTitle
       : s.flow === 'V5-11' && s.orderStatusChecked && s.order?.status === 'ready'
       ? titles['V5-12']
       : s.flow === 'V5-M3'
@@ -1379,8 +1388,8 @@ export default function App() {
         </>
       );
       primary = kakaoTest
-        ? canOpenKakaoPayment(s, kakaoChannel)
-          ? { label: '카카오페이 결제하기', run: app.openKakaoCheckout }
+        ? canContinueKakao
+          ? { label: '카카오페이 결제하기', run: app.openKakaoCheckout, disabled: app.busy }
           : undefined
         : mock
         ? {
@@ -1397,7 +1406,9 @@ export default function App() {
               disabled: app.busy,
             }
           : kakaoTest
-          ? { label: '결제 결과 확인', run: app.checkKakaoPayment }
+          ? canReturnKakaoCart
+            ? { label: '장바구니로 돌아가기', run: app.returnKakaoToCart, disabled: app.busy }
+            : { label: '결제 결과 확인', run: () => nav('P02-V'), disabled: app.busy }
           : { label: '결제 창 열기', run: openPayment },
       ];
       break;
@@ -1459,35 +1470,42 @@ export default function App() {
         if (s.order) primary = { label: '저장된 주문 정보 보기', run: () => nav('V5-11') };
         break;
       }
+      if (kakaoPaymentScreen) {
+        const cartAction = { label: '장바구니로 돌아가기', run: app.returnKakaoToCart, disabled: app.busy };
+        body = (
+          <>
+            {checkingKakaoRecovery ? <T>잠시만 기다려 주세요.</T> :
+              !confirmedKakaoUnpaid ? <T>중복 결제를 막기 위해 결제 결과를 먼저 확인해 주세요.</T> :
+              !canContinueKakao && <T>이 기기에서 카카오페이 결제창을 열 수 없어요.</T>}
+            {s.storageNotice && <div role="alert"><T>{s.storageNotice}</T></div>}
+            {s.payment && <Receipt value={s.payment.snapshot} products={s.products} />}
+          </>
+        );
+        if (checkingKakaoRecovery) break;
+        if (confirmedKakaoUnpaid && canContinueKakao) {
+          primary = { label: '결제 계속하기', run: app.openKakaoCheckout, disabled: app.busy };
+          if (canReturnKakaoCart) secondary = [cartAction];
+        } else if (confirmedKakaoUnpaid && canReturnKakaoCart) {
+          primary = cartAction;
+        } else {
+          primary = { label: '결제 결과 다시 확인', run: app.checkKakaoPayment, disabled: app.busy };
+        }
+        break;
+      }
+
       body = (
         <>
           <Card>
-            {kakaoPaymentScreen ? kakaoStatus : <>
-              <T>{app.busy ? '결제 상태를 확인하고 있어요.' :
-                s.message || '이전 결제의 결과를 다시 확인해 주세요.'}</T>
-              <T>결제 결과가 확인되지 않았다면 새로 결제하지 말고 결과를 다시 확인해 주세요.</T>
-            </>}
+            <T>{app.busy ? '결제 상태를 확인하고 있어요.' :
+              s.message || '이전 결제의 결과를 다시 확인해 주세요.'}</T>
+            <T>결제 결과가 확인되지 않았다면 새로 결제하지 말고 결과를 다시 확인해 주세요.</T>
           </Card>
           {s.payment && <Receipt value={s.payment.snapshot} products={s.products} />}
         </>
       );
-      primary = {
-        label: '결제 결과 다시 확인',
-        run: kakaoPaymentScreen ? app.checkKakaoPayment : () => nav('P02-V'),
-        disabled: !kakaoPaymentScreen && app.busy,
-      };
-      secondary = kakaoPaymentScreen
-        ? canOpenKakaoPayment(s, kakaoChannel)
-          ? [{ label: '기존 결제 이어하기', run: app.openKakaoCheckout }]
-          : []
-        : s.payment?.state === 'ready' && !s.error && !app.busy && paymentMatchesRequest(s.payment, s.request)
-          ? [
-              {
-                label: '기존 결제 이어하기',
-                run: () => nav('PAYMENT_EXTERNAL'),
-              },
-            ]
-          : [];
+      primary = { label: '결제 결과 다시 확인', run: () => nav('P02-V'), disabled: app.busy };
+      if (s.payment?.state === 'ready' && !s.error && !app.busy && paymentMatchesRequest(s.payment, s.request))
+        secondary = [{ label: '결제 계속하기', run: () => nav('PAYMENT_EXTERNAL') }];
       break;
     case 'V5-10':
       body = s.order && (
@@ -1774,7 +1792,8 @@ export default function App() {
                 />
               )}
               {productHeading && <Photo large />}
-              <h1 ref={heading} className="section-heading" style={{ fontSize: 26 * theme.scale }}>
+              <h1 ref={heading} className="section-heading" style={{ fontSize: 26 * theme.scale }}
+                aria-live={kakaoPaymentScreen && s.flow === 'P02-V' && !s.recoveryRequired ? 'polite' : undefined}>
                 {title}
               </h1>
               {!!alertText &&

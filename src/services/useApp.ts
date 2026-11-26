@@ -7,7 +7,7 @@ import * as Device from '../native/browserDevice';
 import { persist, readSnapshot, SnapshotConflict } from './storage';
 import * as api from './api';
 import { startDiscovery } from './discovery';
-import { advancePayment, canOpenKakaoPayment, openKakaoCheckout, paymentResult } from './checkout';
+import { advancePayment, canOpenKakaoPayment, openKakaoCheckout, paymentResult, returnKakaoPaymentToCart } from './checkout';
 import { watchPaymentReturn } from './paymentReturn';
 
 export function useApp() {
@@ -18,6 +18,8 @@ export function useApp() {
   const [checkingPayment, setCheckingPayment] = useState(false);
   const [kakaoCheckStatus, setKakaoCheckStatus] = useState<'idle' | 'checking' | 'checked' | 'unavailable'>('idle');
   const openingKakao = useRef(false);
+  const returningKakao = useRef(false);
+  const kakaoDecision = useRef(0);
   const paymentWatcher = useRef<ReturnType<typeof watchPaymentReturn> | null>(null);
   const page = useRef({ epoch: 0, suspended: false, resumeRevision: undefined as number | undefined });
   const presented = useRef<Snapshot | undefined>(undefined);
@@ -54,6 +56,7 @@ export function useApp() {
       const saved = await readSnapshot().catch(() => null);
       if (!active || page.current.epoch !== epoch) return;
       presented.current = undefined;
+      setKakaoCheckStatus('idle');
       if (resumed) page.current.resumeRevision = live.current.revision + 1;
       dispatch({
         type: 'HYDRATE', snapshot: saved, kakaoTest: kakaoPage, kakaoOrigin, resumed,
@@ -175,45 +178,51 @@ export function useApp() {
   const watchedPaymentId = watchKakao ? s.payment?.id : undefined;
   const watchedRequestKey = watchKakao && !watchedPaymentId ? s.request?.key : undefined;
   useEffect(() => {
-    setKakaoCheckStatus('idle');
+    const autoCheck = s.flow === 'P02-V' && !!watchedPaymentId;
+    setKakaoCheckStatus(autoCheck ? navigator.onLine === false ? 'unavailable' : 'checking' : 'idle');
     if (!watchedPaymentId && !watchedRequestKey) return;
     const currentPage = pageGuard();
     const revision = s.revision;
     let active = true;
-    let first = true;
+    const requestKey = s.request?.key;
     const isCurrent = () => active && currentPage() && live.current.revision === revision &&
-      live.current.payment?.id === watchedPaymentId &&
-      (!!watchedPaymentId || live.current.request?.key === watchedRequestKey);
+      live.current.payment?.id === watchedPaymentId && live.current.request?.key === requestKey;
+    const interrupted = () => {
+      if (isCurrent() && !returningKakao.current) setKakaoCheckStatus('unavailable');
+    };
     const watcher = watchPaymentReturn(async read => {
       if (!isCurrent()) return true;
+      const decision = kakaoDecision.current;
+      const canApply = () => isCurrent() && decision === kakaoDecision.current && !returningKakao.current;
+      if (!canApply()) return false;
       const state = live.current;
-      const announceCheck = read.manual || (first && s.flow === 'P02-V');
-      first = false;
-      if (announceCheck) setKakaoCheckStatus('checking');
+      if (read.manual) setKakaoCheckStatus('checking');
       let checked = false;
       try {
         // Lost preparation responses are replayed with the stored key only by an explicit check.
-        const result = await advancePayment(watchedPaymentId ? state : { ...state, retryVerification: true }, isCurrent);
-        if (!result || !isCurrent()) return true;
-        checked = true;
-        dispatch(result);
+        const result = await advancePayment(watchedPaymentId ? state : { ...state, retryVerification: true }, canApply);
+        if (!canApply()) return !isCurrent();
+        if (!result) return true;
+        checked = result.type === 'PAYMENT_RESULT' && !result.error;
+        dispatch(result.type === 'PAYMENT_RESULT' || result.type === 'FAIL' ? { ...result, revision } : result);
         return result.type === 'PAYMENT_RESULT' &&
           (!!result.order || ['cancelled', 'failed', 'expired'].includes(result.payment.state));
       } catch (error) {
-        if (isCurrent() && handleConflict(error)) return true;
+        if (canApply() && handleConflict(error)) return true;
         throw error;
       } finally {
-        if ((announceCheck || read.manual) && isCurrent())
-          setKakaoCheckStatus(checked ? 'checked' : 'unavailable');
+        if (canApply()) setKakaoCheckStatus(checked ? 'checked' : 'unavailable');
       }
-    }, s.flow === 'P02-V', window, document, {
+    }, autoCheck, window, document, {
       automatic: !!watchedPaymentId,
-      onManualInterrupted: () => { if (isCurrent()) setKakaoCheckStatus('unavailable'); },
+      onManualInterrupted: interrupted,
     });
+    window.addEventListener('offline', interrupted);
     paymentWatcher.current = watcher;
     return () => {
       active = false;
       watcher.close();
+      window.removeEventListener('offline', interrupted);
       paymentWatcher.current = null;
     };
   }, [watchedPaymentId, watchedRequestKey, s.flow, s.revision]);
@@ -333,10 +342,41 @@ export function useApp() {
       setBusy(false);
     }
   }
+  async function returnToCart() {
+    const state = live.current;
+    const { payment, revision } = state;
+    if (returningKakao.current || openingKakao.current || !payment?.cartReturnAvailable ||
+        !['P02-V', 'PAYMENT_EXTERNAL'].includes(state.flow)) return;
+    const currentPage = pageGuard();
+    const isCurrent = () => currentPage() && live.current.revision === revision &&
+      live.current.payment?.id === payment.id && live.current.request?.key === state.request?.key;
+
+    returningKakao.current = true;
+    kakaoDecision.current++;
+    setBusy(true);
+    setKakaoCheckStatus('checking');
+    try {
+      const result = await returnKakaoPaymentToCart(state, isCurrent);
+      if (!isCurrent()) return;
+      if (result) dispatch({ ...result, revision });
+      setKakaoCheckStatus(result?.type === 'PAYMENT_RESULT' && !result.error ? 'checked' : 'unavailable');
+    } catch (error) {
+      if (isCurrent()) {
+        if (state.flow === 'PAYMENT_EXTERNAL')
+          dispatch({ type: 'FAIL', flow: 'P02-V', message: message(error), revision });
+        setKakaoCheckStatus('unavailable');
+      }
+    } finally {
+      returningKakao.current = false;
+      setBusy(false);
+    }
+  }
+
   function leaveForKakaoCheckout() {
+    if (returningKakao.current) return;
     const state = live.current;
     const currentPage = pageGuard();
-    const isCurrent = () => currentPage() && live.current.revision === state.revision &&
+    const isCurrent = () => !returningKakao.current && currentPage() && live.current.revision === state.revision &&
       live.current.payment?.id === state.payment?.id && canOpenKakaoPayment(live.current);
     return openKakaoCheckout(state, openingKakao, isCurrent, error => {
       dispatch({ type: 'STORAGE_ERROR', message: error });
@@ -361,6 +401,7 @@ export function useApp() {
     kakaoCheckStatus,
     checkKakaoPayment: () => setKakaoCheckStatus(paymentWatcher.current?.checkNow() ? 'checking' : 'unavailable'),
     openKakaoCheckout: leaveForKakaoCheckout,
+    returnKakaoToCart: returnToCart,
     speak,
     discover,
     voiceSearch,

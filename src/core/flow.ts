@@ -74,6 +74,13 @@ export function lastOrderForStore(state: State) {
   return state.history[orderHistoryKey(state.storeId, catalogConnection(state))] ?? state.history[state.storeId];
 }
 
+function returnToOrderOrCart(state: State) {
+  const resumeKakaoCart = !!kakaoRetryConnection(state);
+  const cleared: State = { ...state, payment: undefined, request: undefined,
+    discovery: resumeKakaoCart ? 'demo' : state.discovery };
+  return state.order ? reduce(cleared, { type: 'OPEN_ORDER' }) : goto(cleared, 'V5-08');
+}
+
 export type Action =
   | {
       type: 'HYDRATE';
@@ -117,7 +124,7 @@ export type Action =
   | { type: 'STORAGE_ERROR'; message: string }
   | { type: 'ACCEPT_CHANGED' }
   | { type: 'PAYMENT_READY'; payment: Payment }
-  | { type: 'PAYMENT_RESULT'; payment: Payment; order?: Order; error?: string }
+  | { type: 'PAYMENT_RESULT'; payment: Payment; order?: Order; error?: string; returnToCart?: boolean; revision?: number }
   | { type: 'RETRY_PAYMENT' }
   | { type: 'RETRY_CHECKOUT'; key: string }
   | { type: 'ORDER_UPDATED'; order: Order }
@@ -707,6 +714,10 @@ export function reduce(s: State, a: Action): State {
           };
         }
         const kakao = p.connection?.mode === KAKAO_TEST_PROVIDER;
+        if (kakao && (p.returnedToCart || a.returnToCart) &&
+            ['cancelled', 'failed', 'expired'].includes(p.state) && !p.orderId &&
+            paymentMatchesRequest(p, s.request))
+          return returnToOrderOrCart({ ...s, payment: p });
         const flow =
           p.state === 'cancelled'
             ? 'P02-C'
@@ -714,9 +725,10 @@ export function reduce(s: State, a: Action): State {
             ? 'P02-F'
             : p.state === 'expired'
             ? 'P02-T'
-            : kakao && s.flow === 'PAYMENT_EXTERNAL' ? 'PAYMENT_EXTERNAL' : 'P02-V';
+            : kakao && p.state === 'ready' && !a.error && s.flow === 'PAYMENT_EXTERNAL' ? 'PAYMENT_EXTERNAL' : 'P02-V';
         if (kakao && s.flow === flow && s.payment?.state === p.state && s.payment.redirect === p.redirect &&
             s.payment.orderId === p.orderId && s.payment.failureReason === p.failureReason &&
+            s.payment.cartReturnAvailable === p.cartReturnAvailable &&
             s.payment.checkoutAvailable?.pc === p.checkoutAvailable?.pc &&
             s.payment.checkoutAvailable?.mobile === p.checkoutAvailable?.mobile && s.error === (a.error ?? ''))
           return s;
@@ -733,11 +745,7 @@ export function reduce(s: State, a: Action): State {
       }
       case 'RETRY_PAYMENT': {
         if (!['P01-E2', 'P02-C', 'P02-F', 'P02-T'].includes(s.flow) || s.recoveryRequired) return s;
-        // A restored demo checkout can coexist with a legacy server setting.
-        const resumeKakaoCart = !!kakaoRetryConnection(s);
-        const cleared: State = { ...s, payment: undefined, request: undefined,
-          discovery: resumeKakaoCart ? 'demo' : s.discovery };
-        return s.order ? reduce(cleared, { type: 'OPEN_ORDER' }) : goto(cleared, 'V5-08');
+        return returnToOrderOrCart(s);
       }
       case 'OPEN_ORDER':
         if (!s.order || s.request || s.payment || s.recoveryRequired) return s;
@@ -800,6 +808,9 @@ export function reduce(s: State, a: Action): State {
   }
 }
 export function snapshot(s: Snapshot): Snapshot {
+  // Checkout eligibility expires with the provider lookup and must be checked again after a reload.
+  const payment = s.payment && { ...s.payment };
+  if (payment) delete payment.cartReturnAvailable;
   return {
     onboarded: s.onboarded,
     settings: s.settings,
@@ -807,7 +818,7 @@ export function snapshot(s: Snapshot): Snapshot {
     cart: s.cart,
     history: s.history,
     request: s.request,
-    payment: s.payment,
+    payment,
     order: s.order,
     queuedOrders: s.queuedOrders,
   };

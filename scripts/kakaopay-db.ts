@@ -10,7 +10,7 @@ type DatabasePayment = {
   userId: string;
   item: string;
   created: number;
-  state: Payment['state'];
+  state: Payment['state'] | 'abandoned';
   snapshot: string;
   tid: string | null;
   pc: string | null;
@@ -155,6 +155,24 @@ export class PaymentDatabase {
         AND attempted = 0 AND aid IS NULL AND mismatch = 0
         AND NOT EXISTS (SELECT 1 FROM orders WHERE orders.paymentId = payments.id)
     `).run(id, tid, now - READY_WINDOW_MS - READY_EXPIRY_GRACE_MS).changes === 1;
+  }
+
+  abandonUnapproved(owner: string, id: string, tid: string, now: () => number) {
+    // The same write lock and predicates as approval make the two decisions exclusive.
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const closed = this.db.prepare(`
+        UPDATE payments SET state = 'abandoned'
+        WHERE owner = ? AND id = ? AND tid = ? AND created > ? AND state IN ('ready', 'review')
+          AND attempted = 0 AND aid IS NULL AND mismatch = 0
+          AND NOT EXISTS (SELECT 1 FROM orders WHERE orders.paymentId = payments.id)
+      `).run(owner, id, tid, now() - READY_WINDOW_MS).changes === 1;
+      this.db.exec('COMMIT');
+      return closed;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   storeApproval(id: string, aid: string | null, mismatch: boolean) {
