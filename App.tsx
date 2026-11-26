@@ -96,22 +96,30 @@ export default function App() {
   const { alert, helpCard, dialog } = useAppDialog(theme);
   const entryScreen = ['START', 'BLE_GUIDE', 'V5-01', 'V5-01e', 'V5-02', 'V5-02e', 'V5-02s', 'V5-03', 'V5-04'].includes(s.flow);
   const screenKey = `${s.flow}:${s.revision}`;
-  const kakaoPaymentScreen = s.payment?.connection?.mode === KAKAO_TEST_PROVIDER &&
-    ['PAYMENT_EXTERNAL', 'P02-V'].includes(s.flow);
+  const kakaoPaymentScreen = ['PAYMENT_EXTERNAL', 'P02-V'].includes(s.flow) &&
+    (s.payment?.provider === KAKAO_TEST_PROVIDER ||
+      (s.payment?.connection ?? s.request?.connection)?.mode === KAKAO_TEST_PROVIDER);
   const kakaoChannel = kakaoPaymentScreen ? paymentChannel(globalThis.navigator) : 'pc';
+  const checkedKakaoPayment = app.kakaoCheckStatus === 'checked';
+  function kakaoPaymentMessage() {
+    if (app.kakaoCheckStatus === 'checking') return '결제 결과를 확인하고 있어요.';
+    if (app.kakaoCheckStatus === 'unavailable')
+      return '결제 결과를 확인하지 못했어요. 연결을 확인하고 다시 시도해 주세요.';
+    if (s.error) return s.error;
+    if (s.payment?.state !== 'ready') return checkedKakaoPayment
+      ? '결제 결과를 확인했지만 아직 확정되지 않았어요. 새로 결제하지 말아 주세요.'
+      : '아직 결제 결과가 확정되지 않았어요. 새로 결제하지 말아 주세요.';
+    if (s.payment.checkoutAvailable?.[kakaoChannel] === false) return checkedKakaoPayment
+      ? '결제 상태를 확인했어요. 아직 이 기기에서 카카오페이 결제창을 열 수 없어요.'
+      : '이 기기에서 카카오페이 결제창을 열 수 없어요. 결제 결과를 확인해 주세요.';
+    if (checkedKakaoPayment) return '결제 상태를 확인했어요. 기존 결제를 이어갈 수 있어요.';
+    return kakaoChannel === 'mobile'
+      ? '카카오톡에서 결제를 진행해 주세요.'
+      : '카카오페이 결제창에서 결제를 진행해 주세요.';
+  }
   const kakaoStatus = kakaoPaymentScreen && (
     <>
-      <div role="status">
-        <T>{app.checkingKakaoPayment || (!s.error && s.payment?.state === 'approving')
-          ? '결제 결과를 확인하고 있어요.'
-          : !s.error && s.payment?.checkoutAvailable?.[kakaoChannel] === false
-          ? '이 기기에서 카카오페이 결제창을 열 수 없어요. 결제 결과를 확인해 주세요.'
-          : s.error || s.payment?.state !== 'ready'
-          ? '아직 결제 결과를 확인하지 못했어요. 다시 결제하지 말아 주세요.'
-          : kakaoChannel === 'mobile'
-          ? '카카오톡에서 결제를 진행해 주세요.'
-          : '카카오페이 결제창에서 결제를 진행해 주세요.'}</T>
-      </div>
+      <div role="status"><T>{kakaoPaymentMessage()}</T></div>
       {s.storageNotice && <div role="alert"><T>{s.storageNotice}</T></div>}
     </>
   );
@@ -1322,7 +1330,7 @@ export default function App() {
     case 'PAYMENT_EXTERNAL': {
       const payment = s.payment;
       const kakaoTest = kakaoPaymentScreen;
-      const mock = !payment?.provider.startsWith('kakao');
+      const mock = !kakaoTest && !payment?.provider.startsWith('kakao');
       const openPayment = () => {
         try {
           if (!payment?.redirect) throw new Error('결제 창 주소를 확인할 수 없어요.');
@@ -1407,16 +1415,29 @@ export default function App() {
       };
       break;
     case 'P02-C':
-    case 'P02-F':
+    case 'P02-F': {
+      const preparationFailed = s.flow === 'P02-F' && s.payment?.failureReason === 'preparation';
+      const returnToCart = {
+        label: s.order ? '진행 중인 주문 보기' : '장바구니로 돌아가기',
+        run: () => d({ type: 'RETRY_PAYMENT' }),
+      };
       body = <Card compact>
-        <InfoRow icon="card" label="결제 상태" value={s.flow === 'P02-C' ? '결제 취소' : '결제 실패'} />
-        <T>담아 둔 메뉴는 장바구니에서 확인할 수 있어요.</T>
+        <InfoRow icon="card" label="결제 상태"
+          value={preparationFailed ? '결제 준비 실패' : s.flow === 'P02-C' ? '결제 취소' : '결제 실패'} />
+        <T>{preparationFailed
+          ? '카카오페이 결제창을 준비하지 못했어요. 담아 둔 메뉴는 장바구니에 그대로 있어요.'
+          : '담아 둔 메뉴는 장바구니에서 확인할 수 있어요.'}</T>
       </Card>;
-      if (!s.order && cartQuote && s.payment?.state === (s.flow === 'P02-C' ? 'cancelled' : 'failed')) {
-        primary = { label: `다시 결제하기 · ${money(cartQuote.total)}`, run: () => d({ type: 'RETRY_CHECKOUT', key: key() }) };
+      if (preparationFailed) {
+        primary = returnToCart;
+      } else {
+        if (!s.order && cartQuote && s.payment?.state === (s.flow === 'P02-C' ? 'cancelled' : 'failed')) {
+          primary = { label: `다시 결제하기 · ${money(cartQuote.total)}`, run: () => d({ type: 'RETRY_CHECKOUT', key: key() }) };
+        }
+        secondary = [returnToCart];
       }
-      secondary = [{ label: s.order ? '진행 중인 주문 보기' : '장바구니로 돌아가기', run: () => d({ type: 'RETRY_PAYMENT' }) }];
       break;
+    }
     case 'P01-E2':
     case 'P02-T':
       body = (
@@ -1453,7 +1474,7 @@ export default function App() {
       primary = {
         label: '결제 결과 다시 확인',
         run: kakaoPaymentScreen ? app.checkKakaoPayment : () => nav('P02-V'),
-        disabled: app.busy,
+        disabled: !kakaoPaymentScreen && app.busy,
       };
       secondary = kakaoPaymentScreen
         ? canOpenKakaoPayment(s, kakaoChannel)

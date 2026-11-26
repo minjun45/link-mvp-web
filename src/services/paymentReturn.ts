@@ -4,16 +4,19 @@ const WAKE_COOLDOWN_MS = 8000;
 
 type Browser = Pick<Window, 'addEventListener' | 'removeEventListener' | 'navigator'>;
 type Page = Pick<Document, 'addEventListener' | 'removeEventListener' | 'visibilityState'>;
+type Read = { manual: boolean };
 
 /** One foreground checkout can use at most three automatic reads per wake. */
 export function watchPaymentReturn(
-  check: (manual: boolean) => Promise<boolean>,
+  check: (read: Read) => Promise<boolean>,
   checkOnStart: boolean,
   browser: Browser = window,
   page: Page = document,
+  { automatic = true, onManualInterrupted = () => {} } = {},
 ) {
   let active = true;
   let inFlight = false;
+  let read: Read | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let remaining = 0;
   let lastCheck = -Infinity;
@@ -23,21 +26,29 @@ export function watchPaymentReturn(
   const available = () => active && page.visibilityState === 'visible' && browser.navigator.onLine !== false;
 
   function pause() {
+    if (active && timer !== undefined && read?.manual) onManualInterrupted();
     clearTimeout(timer);
     timer = undefined;
+    if (!inFlight) read = undefined;
     remaining = 0;
     resumedDuringRead = false;
   }
 
   function queue(manual = false) {
+    const attempt = { manual };
+    read = attempt;
     timer = setTimeout(async () => {
       timer = undefined;
-      if (!available() || !remaining) return;
+      if (!available() || !remaining) {
+        read = undefined;
+        if (active && attempt.manual) onManualInterrupted();
+        return;
+      }
       lastCheck = Date.now();
       remaining--;
       inFlight = true;
       try {
-        if (await check(manual)) {
+        if (await check(attempt)) {
           active = false;
           pause();
         }
@@ -45,6 +56,7 @@ export function watchPaymentReturn(
         // A failed read is eligible for the next check in this round.
       } finally {
         inFlight = false;
+        read = undefined;
         if (available() && remaining) queue();
         else if (resumedDuringRead) {
           resumedDuringRead = false;
@@ -54,16 +66,16 @@ export function watchPaymentReturn(
     }, Math.max(0, CHECK_INTERVAL_MS - (Date.now() - lastCheck)));
   }
 
-  function wake(source: 'event' | 'return' | 'manual') {
-    if (!available() || timer !== undefined) return;
+  function wake(source: 'event' | 'return') {
+    if (!automatic || !available() || timer !== undefined) return;
     if (inFlight) {
       if (source === 'return' && remaining === 0) resumedDuringRead = true;
       return;
     }
     if (source === 'event' && Date.now() - lastWake < WAKE_COOLDOWN_MS) return;
     lastWake = Date.now();
-    remaining = source === 'manual' ? 1 : AUTOMATIC_CHECKS;
-    queue(source === 'manual');
+    remaining = AUTOMATIC_CHECKS;
+    queue();
   }
 
   const onFocus = () => wake('event');
@@ -85,7 +97,17 @@ export function watchPaymentReturn(
   if (checkOnStart) wake('return');
 
   return {
-    checkNow: () => wake('manual'),
+    checkNow() {
+      if (!available()) return false;
+      lastWake = Date.now();
+      // A manual request shares the read that is queued or already running.
+      if (read) read.manual = true;
+      else {
+        remaining = 1;
+        queue(true);
+      }
+      return true;
+    },
     close() {
       active = false;
       pause();

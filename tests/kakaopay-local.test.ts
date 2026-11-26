@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { afterEach, expect, test, vi } from 'vitest';
 import { PaymentDatabase } from '../scripts/kakaopay-db';
 import { createKakaoPayLocalServer } from '../scripts/kakaopay-local';
+import type { KakaoDiagnostic } from '../scripts/kakaopay-provider';
 import { defaults, quote } from '../src/core/domain';
 import { catalogConnection, initial, lastOrderForStore, reduce, settings, snapshot } from '../src/core/flow';
 import { KAKAO_TEST_ORIGIN, KAKAO_TEST_PROVIDER, type Order, type Payment, type State } from '../src/core/types';
@@ -44,9 +45,11 @@ async function fixture(withFile = false, hosted = false, publicAccess = false) {
   const gateKey = randomUUID().replaceAll('-', '');
   const origin = hosted ? QA_ORIGIN : KAKAO_TEST_ORIGIN;
   const calls: { name: string; payload: GatewayRequest }[] = [];
+  const diagnostics: KakaoDiagnostic[] = [];
   const gateway = new Map<string, GatewayPayment>();
   const scenario = { publicAccess, readyLost: false, approvalLost: false, orderOffline: false, wrongTotal: false,
     clock: Date.parse(STAMP), waitReady: undefined as Promise<void> | undefined,
+    readyResponse: undefined as ((tid: string) => Response) | undefined,
     pc: PC as string | undefined, mobile: MOBILE as string | undefined, diskReady: true };
   let latest: GatewayPayment | undefined;
   let database: PaymentDatabase;
@@ -66,7 +69,8 @@ async function fixture(withFile = false, hosted = false, publicAccess = false) {
       gateway.set(tid, latest);
       if (scenario.waitReady) await scenario.waitReady;
       if (scenario.readyLost) throw new Error('lost response');
-      return Response.json({ tid, next_redirect_pc_url: scenario.pc, next_redirect_mobile_url: scenario.mobile });
+      return scenario.readyResponse?.(tid) ??
+        Response.json({ tid, next_redirect_pc_url: scenario.pc, next_redirect_mobile_url: scenario.mobile });
     }
 
     const trade = gateway.get(String(payload.tid));
@@ -95,7 +99,8 @@ async function fixture(withFile = false, hosted = false, publicAccess = false) {
       origin, upstream: QA_UPSTREAM, accessKey: gateKey, publicAccess: scenario.publicAccess,
       checkDisk: () => { if (!scenario.diskReady) throw new Error('disk unavailable'); },
     } : undefined;
-    server = createKakaoPayLocalServer({ database, transport, devKey: credential, qa, now: () => scenario.clock });
+    server = createKakaoPayLocalServer({ database, transport, devKey: credential, qa, now: () => scenario.clock,
+      report: diagnostic => diagnostics.push(JSON.parse(JSON.stringify(diagnostic)) as KakaoDiagnostic) });
     await new Promise<void>((resolve, reject) => server.once('error', reject).listen(0, '127.0.0.1', resolve));
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Missing test address');
@@ -172,7 +177,7 @@ async function fixture(withFile = false, hosted = false, publicAccess = false) {
   }
 
   return {
-    send, browser, login, calls, filename, credential, scenario, returnPath,
+    send, browser, login, calls, diagnostics, filename, credential, scenario, returnPath,
     operations: () => calls.map(call => call.name),
     gatewayTrade: () => latest!,
     restart: async () => { await stop(); await start(); },
@@ -244,6 +249,8 @@ test('public QA accepts the deployed frontend bootstrap without an access cookie
   const path = new URL(payment.redirect!).pathname;
   expect((await owner.navigate(path)).headers.location).toBe(PC);
   expect((await owner.navigate(path + '?channel=mobile')).headers.location).toBe(MOBILE);
+  expect((await owner.navigate(path + '?channel=pc', { 'User-Agent': 'Android' })).headers.location).toBe(PC);
+  expect((await owner.navigate(path, { 'User-Agent': 'iPhone' })).headers.location).toBe(MOBILE);
   expect((await outsider.navigate(path)).status).toBe(404);
   expect((await outsider.api('/payments/' + payment.id)).status).toBe(404);
   expect((await owner.navigate(fx.returnPath())).headers.location).toBe('/');
@@ -510,6 +517,7 @@ test('serializes duplicate preparations and approvals with one durable order', a
     duplicate = await owner.prepare();
     expect(duplicate.state).toBe('review');
     expect(duplicate).not.toHaveProperty('redirect');
+    expect(await owner.payment(duplicate.id)).toEqual(duplicate);
     expect((await owner.api('/payments', { ...checkout, key: 'another-key' })).status).toBe(409);
   } finally {
     release();
@@ -570,21 +578,153 @@ test('leaves an unverifiable amount pending and keeps gateway error data private
   expect((await owner.api('/payments', { ...checkout, key: 'different-key' })).status).toBe(409);
 });
 
-test('keeps an unknown preparation locked across restart without fetching or resubmitting a missing TID', async () => {
+test.each([
+  ['HTTP rejection', () => Response.json({ error_code: -400, error_message: 'private domain information' }, { status: 400 }),
+    { reason: 'http', status: 400, errorCode: -400 }],
+  ['unexpected error code', () => Response.json({ error_code: 'private-code', error_message: 'private domain information' }, { status: 400 }),
+    { reason: 'http', status: 400 }],
+  ['request timeout', () => { throw new DOMException('private timeout reason', 'TimeoutError'); },
+    { reason: 'timeout' }],
+  ['non-JSON response', () => new Response('private broken body'),
+    { reason: 'response-format', status: 200 }],
+  ['missing TID', () => Response.json({ next_redirect_pc_url: PC }),
+    { reason: 'response-format', status: 200, invalidCheckoutUrl: false }],
+] as const)('releases a checkout after %s and records only safe diagnostics', async (_name, respond, diagnostic) => {
+  const fx = await fixture(false, true, true);
+  const owner = await fx.browser();
+  fx.scenario.readyResponse = respond;
+  const first = await owner.prepare();
+  expect(first).toMatchObject({ state: 'failed', failureReason: 'preparation', snapshot: expected });
+  expect(first).not.toHaveProperty('redirect');
+  const callback = fx.returnPath();
+  expect(await owner.prepare()).toEqual(first);
+  expect(await owner.payment(first.id)).toEqual(first);
+  expect(fx.operations()).toEqual(['ready']);
+  expect(fx.diagnostics).toEqual([{ operation: 'ready', ...diagnostic }]);
+  expect(JSON.stringify(fx.diagnostics)).not.toMatch(/private|kakaopay.com/);
+
+  fx.scenario.readyResponse = undefined;
+  const next = await owner.prepare({ ...checkout, key: 'next-ready' });
+  expect(next.state).toBe('ready');
+  expect(next.id).not.toBe(first.id);
+  expect((await owner.navigate(callback)).headers.location).toBe('/checkout-unavailable');
+  expect(fx.operations()).toEqual(['ready', 'ready']);
+  await owner.navigate(fx.returnPath());
+  expect((await owner.order((await owner.payment(next.id)).orderId!)).number).toBe('A-0001');
+  expect(await owner.payment(first.id)).toEqual(first);
+});
+
+test('recovers a lost ready response without reopening the failed request or accepting its callback', async () => {
   const fx = await fixture(true);
   const owner = await fx.browser();
   fx.scenario.readyLost = true;
   const payment = await owner.prepare();
-  expect(payment.state).toBe('review');
+  const callback = fx.returnPath();
+  expect(payment).toMatchObject({ state: 'failed', failureReason: 'preparation' });
   expect(payment.redirect).toBeUndefined();
+  expect(fx.diagnostics).toEqual([{ operation: 'ready', reason: 'network' }]);
   await fx.restart();
   const restarted = await fx.browser(owner.cookie);
   expect(await restarted.prepare()).toEqual(payment);
-  expect((await restarted.payment(payment.id)).state).toBe('review');
-  expect((await restarted.api('/payments', { ...checkout, key: 'different-key' })).status).toBe(409);
-  expect((await restarted.navigate(fx.returnPath())).headers.location).toBe('/checkout-unavailable');
+  expect(await restarted.payment(payment.id)).toEqual(payment);
+  fx.scenario.readyLost = false;
+  const next = await restarted.prepare({ ...checkout, key: 'different-key' });
+  expect(next.state).toBe('ready');
+  expect((await restarted.navigate(callback)).headers.location).toBe('/checkout-unavailable');
+  expect(fx.operations()).toEqual(['ready', 'ready']);
+});
+
+test.each([undefined, 'https://unapproved.test/private-path'])(
+  'preserves an unexposed TID but releases the order when both checkout channels are unusable (%s)',
+  async candidate => {
+    const fx = await fixture(true);
+    fx.scenario.pc = candidate;
+    fx.scenario.mobile = undefined;
+    const owner = await fx.browser();
+    const failed = await owner.prepare();
+    expect(failed).toMatchObject({ state: 'failed', failureReason: 'preparation', checkoutAvailable: { pc: false, mobile: false } });
+    const db = new DatabaseSync(fx.filename, { readOnly: true });
+    try {
+      expect(db.prepare('SELECT tid, attempted FROM payments WHERE id = ?').get(failed.id))
+        .toEqual({ tid: fx.gatewayTrade().tid, attempted: 0 });
+    } finally {
+      db.close();
+    }
+    const callback = fx.returnPath();
+    expect((await owner.navigate('/checkout/' + failed.id)).headers.location).toBe('/');
+    expect(fx.diagnostics).toEqual([{ operation: 'ready', reason: 'checkout-url', status: 200, invalidCheckoutUrl: !!candidate }]);
+    fx.scenario.pc = PC;
+    const next = await owner.prepare({ ...checkout, key: 'next-checkout' });
+    expect(next.state).toBe('ready');
+    await owner.navigate(callback);
+    expect(fx.operations()).toEqual(['ready', 'ready']);
+  },
+);
+
+function reserveLegacy(filename: string, cookie: string, state: 'review' | 'preparing') {
+  const owner = cookie.split('; ').at(-1)!.split('=')[1];
+  const db = new PaymentDatabase(filename);
+  try {
+    const reserved = db.reserve(owner, checkout.key, expected, expected.items[0].name, Date.parse(STAMP))!;
+    if (state === 'review') db.setOutcome(reserved.id, 'review');
+    return reserved;
+  } finally {
+    db.close();
+  }
+}
+
+test('same-key replay closes a preparation interrupted by a restart before a TID was stored', async () => {
+  const fx = await fixture(true);
+  const owner = await fx.browser();
+  const abandoned = reserveLegacy(fx.filename, owner.cookie, 'preparing');
+  await fx.restart();
+  const after = await fx.browser(owner.cookie);
+  expect(await after.prepare()).toMatchObject({ id: abandoned.id, state: 'failed', failureReason: 'preparation' });
+  expect((await after.payment(abandoned.id)).state).toBe('failed');
+  expect(fx.operations()).toEqual([]);
+  const fresh = await after.prepare({ ...checkout, key: 'after-interrupted-prepare' });
+  expect(fresh.state).toBe('ready');
   expect(fx.operations()).toEqual(['ready']);
 });
+
+test('a new request releases an unopened legacy review even without a saved payment ID in the browser', async () => {
+  const fx = await fixture(true);
+  const owner = await fx.browser();
+  const abandoned = reserveLegacy(fx.filename, owner.cookie, 'review');
+  const db = new DatabaseSync(fx.filename);
+  try {
+    db.prepare('UPDATE payments SET tid = ? WHERE id = ?').run('unused-tid', abandoned.id);
+  } finally {
+    db.close();
+  }
+  const fresh = await owner.prepare({ ...checkout, key: 'fresh-cart-key' });
+  expect(fresh.state).toBe('ready');
+  expect(await owner.payment(abandoned.id)).toMatchObject({ state: 'failed', failureReason: 'preparation' });
+  expect(fx.operations()).toEqual(['ready']);
+});
+
+test.each(['attempted', 'aid', 'mismatch', 'order'] as const)(
+  'does not recover an otherwise unopened legacy record with evidence of %s',
+  async evidence => {
+    const fx = await fixture(true);
+    const owner = await fx.browser();
+    const row = reserveLegacy(fx.filename, owner.cookie, 'review');
+    const db = new DatabaseSync(fx.filename);
+    try {
+      if (evidence === 'order') {
+        db.prepare('INSERT INTO orders (id, paymentId, created) VALUES (?, ?, ?)').run(randomUUID(), row.id, row.created);
+      } else {
+        db.prepare('UPDATE payments SET ' + evidence + ' = ? WHERE id = ?').run(evidence === 'aid' ? 'known-aid' : 1, row.id);
+      }
+    } finally {
+      db.close();
+    }
+    fx.scenario.clock += 30 * 60_000;
+    expect((await owner.payment(row.id)).state).toBe('review');
+    expect((await owner.api('/payments', { ...checkout, key: 'another-key' })).status).toBe(409);
+    expect(fx.operations()).toEqual([]);
+  },
+);
 
 test('recovers a lost approval response even after expiry and restart, without another approve', async () => {
   const fx = await fixture(true);
@@ -592,6 +732,10 @@ test('recovers a lost approval response even after expiry and restart, without a
   const payment = await owner.prepare();
   fx.scenario.approvalLost = fx.scenario.orderOffline = true;
   await owner.navigate(fx.returnPath());
+  expect(fx.diagnostics).toEqual([
+    { operation: 'approve', reason: 'network' },
+    { operation: 'order', reason: 'http', status: 503 },
+  ]);
   await fx.restart();
   fx.scenario.clock += 16 * 60_000;
   fx.scenario.orderOffline = false;
@@ -675,6 +819,34 @@ async function frontend(fx: Awaited<ReturnType<typeof fixture>>) {
   });
   return { user, begin, fetcher, data, localOrder, reload, blockStorage: () => { writePayment = false; } };
 }
+
+test('rehydration automatically verifies an old unopenable checkout and keeps the cart and history for a new key', async () => {
+  const fx = await fixture(true);
+  const app = await frontend(fx);
+  const payment = reserveLegacy(fx.filename, app.user.cookie, 'review');
+  app.data.set('link-web.state.v1', JSON.stringify(snapshot({
+    ...app.begin,
+    settings: { ...settings, mode: 'server', serverUrl: 'https://legacy-server.test' },
+    payment: { id: payment.id, provider: KAKAO_TEST_PROVIDER, state: 'review', snapshot: expected,
+      connection: app.begin.request?.connection, checkoutAvailable: { pc: false, mobile: false } },
+  })));
+  await fx.restart();
+  const rehydrated = app.reload(true);
+  expect(rehydrated.flow).toBe('P02-V');
+  const failed = reduce(rehydrated, (await advancePayment(rehydrated, () => true))!);
+  expect(failed).toMatchObject({ flow: 'P02-F', payment: { id: payment.id, state: 'failed', failureReason: 'preparation' } });
+  expect(app.fetcher.mock.calls.map(([url]) => url)).toEqual([KAKAO_TEST_ORIGIN + '/api/payments/' + payment.id]);
+  expect(fx.operations()).toEqual([]);
+  expect(reduce(failed, { type: 'RETRY_CHECKOUT', key: 'skip-cart' })).toBe(failed);
+  const cart = reduce(failed, { type: 'RETRY_PAYMENT' });
+  expect(cart).toMatchObject({ flow: 'V5-08', cart: lines, payment: undefined, request: undefined,
+    history: { [store.id]: app.localOrder } });
+  const retry = reduce(cart, { type: 'CHECKOUT', key: 'new-cart-key' });
+  const ready = reduce(retry, (await advancePayment(retry, () => true))!);
+  expect(ready).toMatchObject({ flow: 'PAYMENT_EXTERNAL',
+    request: { key: 'new-cart-key', connection: rehydrated.request?.connection } });
+  expect(ready.payment?.id).not.toBe(payment.id);
+});
 
 test('integrated app persists the payment before opening it, reloads the pinned trade and finishes pickup', async () => {
   const fx = await fixture(true);

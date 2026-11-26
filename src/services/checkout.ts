@@ -12,7 +12,8 @@ const message = (error: unknown) =>
 
 export function canOpenKakaoPayment(state: State, channel = paymentChannel(globalThis.navigator)) {
   const payment = state.payment;
-  return !state.recoveryRequired && !state.error && payment?.connection?.mode === KAKAO_TEST_PROVIDER &&
+  return !state.recoveryRequired && !state.error && payment?.provider === KAKAO_TEST_PROVIDER &&
+    payment.connection?.mode === KAKAO_TEST_PROVIDER &&
     payment.state === 'ready' && !!payment.redirect && payment.checkoutAvailable?.[channel] !== false &&
     paymentMatchesRequest(payment, state.request);
 }
@@ -131,6 +132,7 @@ export async function advancePayment(
       if (!isCurrent()) return;
       payment = checkedPayment(response);
       verifyQuote(payment);
+      if (kakao && payment.failureReason === 'preparation') return { type: 'PAYMENT_RESULT', payment };
       if (preparing && payment.state === 'ready') {
         await storeBeforeOpening(payment);
         if (isCurrent()) return { type: 'PAYMENT_READY', payment };

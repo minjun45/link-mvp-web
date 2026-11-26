@@ -8,11 +8,12 @@ import catalog from '../src/data/catalog.json';
 import App from '../App';
 import { Icon, Photo } from '../src/ui/figma';
 
-const mock = vi.hoisted(() => ({ state: null as State | null, listening: false }));
+const mock = vi.hoisted(() => ({ state: null as State | null, listening: false, kakaoCheckStatus: 'idle' }));
 vi.mock('../src/services/useApp', () => ({
   useApp: () => ({
     s: mock.state, dispatch: vi.fn(), busy: false, listening: mock.listening, speak: vi.fn(),
     discover: vi.fn(), voiceSearch: vi.fn(), cancelVoiceSearch: vi.fn(), complete: vi.fn(), finishPickup: vi.fn(),
+    kakaoCheckStatus: mock.kakaoCheckStatus, checkKakaoPayment: vi.fn(),
   }),
 }));
 vi.mock('../src/native/browserDevice', () => ({ canChooseBeacon: () => true }));
@@ -21,7 +22,8 @@ const products = catalog.menu as Product[];
 const store = { stores: catalog.stores, storeId: catalog.stores[0].id, products };
 const product = (name: string) => products.find(p => p.name === name)!;
 
-function render(flow: State['flow'], extra: Partial<State> = {}) {
+function render(flow: State['flow'], extra: Partial<State> = {}, kakaoCheckStatus = 'idle') {
+  mock.kakaoCheckStatus = kakaoCheckStatus;
   mock.state = { ...initial, ...store, flow, ...extra };
   return renderToStaticMarkup(<App />);
 }
@@ -65,6 +67,50 @@ test('mobile checkout describes the app switch, keeps one status message and omi
   } finally {
     vi.unstubAllGlobals();
   }
+});
+
+test('announces distinct checking, unchanged and unavailable results without offering a new payment', () => {
+  const line = { id: 'kakao-line', productId: products[0].id, options: defaults(products[0]), quantity: 1 };
+  const receipt = quote(catalog.stores[0], products, [line]);
+  const payment = {
+    id: 'old-preparation', provider: KAKAO_TEST_PROVIDER, state: 'review' as const, snapshot: receipt,
+    connection: { mode: KAKAO_TEST_PROVIDER, serverUrl: KAKAO_TEST_ORIGIN } as const,
+    checkoutAvailable: { pc: false, mobile: false },
+  };
+  const html = render('P02-V', { payment }, 'checking');
+  expect(html).toContain('결제 결과를 확인하고 있어요.');
+  const checkButton = html.match(/<button[^>]*>[\s\S]*?<\/button>/g)?.find(button => button.includes('결제 결과 다시 확인'));
+  expect(checkButton).toBeDefined();
+  expect(checkButton).not.toMatch(/disabled/);
+  expect(render('P02-V', { payment }, 'checked')).toContain('결제 결과를 확인했지만 아직 확정되지 않았어요.');
+  expect(render('P02-V', { payment }, 'unavailable')).toContain('연결을 확인하고 다시 시도해 주세요.');
+  expect(render('P02-V', { payment, error: '서버 연결을 확인해 주세요.' }, 'checked')).toContain('서버 연결을 확인해 주세요.');
+  expect(html).not.toMatch(/이 기기에서|다시 결제하기|장바구니로 돌아가기/);
+  expect(render('P02-V', { payment }, 'checked')).not.toContain('이 기기에서');
+});
+
+test('preparation failure explains what happened and offers the cart without a blind retry', () => {
+  const line = { id: 'kakao-line', productId: products[0].id, options: defaults(products[0]), quantity: 1 };
+  const receipt = quote(catalog.stores[0], products, [line]);
+  const payment = {
+    id: 'old-preparation', provider: KAKAO_TEST_PROVIDER, state: 'failed' as const, snapshot: receipt,
+    connection: { mode: KAKAO_TEST_PROVIDER, serverUrl: KAKAO_TEST_ORIGIN } as const,
+    failureReason: 'preparation' as const,
+  };
+  const html = render('P02-F', { payment, cart: [line] });
+  expect(html).toContain('카카오페이 결제창을 준비하지 못했어요.');
+  expect(html).toContain('장바구니로 돌아가기');
+  expect(html).not.toMatch(/이 기기에서|다시 결제하기/);
+});
+
+test('an incompletely pinned Kakao checkout cannot fall back to the legacy new-tab button', () => {
+  const line = { id: 'kakao-line', productId: products[0].id, options: defaults(products[0]), quantity: 1 };
+  const payment = {
+    id: 'unbound-kakao-payment', provider: KAKAO_TEST_PROVIDER, state: 'ready' as const,
+    snapshot: quote(catalog.stores[0], products, [line]), redirect: KAKAO_TEST_ORIGIN + '/checkout/unbound-kakao-payment',
+  };
+  const html = render('PAYMENT_EXTERNAL', { payment });
+  expect(html).not.toMatch(/새 탭에서|결제 창 열기|카카오페이 결제하기|테스트 결제 완료/);
 });
 
 test('menu search field is named by its purpose and shows its example as a native placeholder', () => {

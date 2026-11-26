@@ -621,7 +621,7 @@ export function reduce(s: State, a: Action): State {
         if (s.order && !s.request && !s.payment) return reduce(s, { type: 'OPEN_ORDER' });
         if (a.type === 'RETRY_CHECKOUT') {
           const terminal = (s.flow === 'P02-C' && s.payment?.state === 'cancelled') ||
-            (s.flow === 'P02-F' && s.payment?.state === 'failed');
+            (s.flow === 'P02-F' && s.payment?.state === 'failed' && s.payment.failureReason !== 'preparation');
           if (!terminal || s.order) return s;
         } else if (s.request || s.payment) {
           return ['V5-09', 'PAYMENT_EXTERNAL', 'P02-V'].includes(s.flow) ? s : goto(s, 'P02-V');
@@ -708,7 +708,8 @@ export function reduce(s: State, a: Action): State {
             ? 'P02-T'
             : kakao && s.flow === 'PAYMENT_EXTERNAL' ? 'PAYMENT_EXTERNAL' : 'P02-V';
         if (kakao && s.flow === flow && s.payment?.state === p.state && s.payment.redirect === p.redirect &&
-            s.payment.orderId === p.orderId && s.payment.checkoutAvailable?.pc === p.checkoutAvailable?.pc &&
+            s.payment.orderId === p.orderId && s.payment.failureReason === p.failureReason &&
+            s.payment.checkoutAvailable?.pc === p.checkoutAvailable?.pc &&
             s.payment.checkoutAvailable?.mobile === p.checkoutAvailable?.mobile && s.error === (a.error ?? ''))
           return s;
         return {
@@ -724,7 +725,12 @@ export function reduce(s: State, a: Action): State {
       }
       case 'RETRY_PAYMENT': {
         if (!['P01-E2', 'P02-C', 'P02-F', 'P02-T'].includes(s.flow) || s.recoveryRequired) return s;
-        const cleared = { ...s, payment: undefined, request: undefined };
+        // A restored demo checkout can coexist with a legacy server setting.
+        const resumeKakaoCart = s.payment?.failureReason === 'preparation' && s.kakaoTest &&
+          s.payment.connection?.mode === KAKAO_TEST_PROVIDER &&
+          s.payment.connection.serverUrl === (s.kakaoOrigin ?? KAKAO_TEST_ORIGIN);
+        const cleared: State = { ...s, payment: undefined, request: undefined,
+          discovery: resumeKakaoCart ? 'demo' : s.discovery };
         return s.order ? reduce(cleared, { type: 'OPEN_ORDER' }) : goto(cleared, 'V5-08');
       }
       case 'OPEN_ORDER':

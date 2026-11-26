@@ -16,7 +16,7 @@ export function useApp() {
   live.current = s;
   const [busy, setBusy] = useState(false);
   const [checkingPayment, setCheckingPayment] = useState(false);
-  const [checkingKakaoPayment, setCheckingKakaoPayment] = useState(false);
+  const [kakaoCheckStatus, setKakaoCheckStatus] = useState<'idle' | 'checking' | 'checked' | 'unavailable'>('idle');
   const openingKakao = useRef(false);
   const paymentWatcher = useRef<ReturnType<typeof watchPaymentReturn> | null>(null);
   const page = useRef({ epoch: 0, suspended: false, resumeRevision: undefined as number | undefined,
@@ -115,11 +115,9 @@ export function useApp() {
     const state = s;
     const currentPage = pageGuard();
     const isCurrent = () => currentPage() && !cancelled && live.current.revision === state.revision;
+    const kakao = (state.payment?.connection ?? state.request?.connection)?.mode === KAKAO_TEST_PROVIDER;
     const checkPayment = !state.recoveryRequired && (
-      state.flow === 'V5-09' ||
-      (state.flow === 'P02-V' && (state.payment
-        ? state.payment.connection?.mode !== KAKAO_TEST_PROVIDER
-        : state.retryVerification))
+      state.flow === 'V5-09' || (state.flow === 'P02-V' && !kakao && (!!state.payment || state.retryVerification))
     );
     setCheckingPayment(checkPayment);
     const send = (action: Parameters<typeof dispatch>[0]) => {
@@ -160,39 +158,50 @@ export function useApp() {
     };
     // revision marks explicit transitions/retries, not text input or persistence updates.
   }, [s.flow, s.revision]);
-  const watchedPaymentId = !s.recoveryRequired && ['PAYMENT_EXTERNAL', 'P02-V'].includes(s.flow)
-    && s.payment?.connection?.mode === KAKAO_TEST_PROVIDER ? s.payment.id : undefined;
+  const watchKakao = !s.recoveryRequired && ['PAYMENT_EXTERNAL', 'P02-V'].includes(s.flow) &&
+    (s.payment?.connection ?? s.request?.connection)?.mode === KAKAO_TEST_PROVIDER;
+  const watchedPaymentId = watchKakao ? s.payment?.id : undefined;
+  const watchedRequestKey = watchKakao && !watchedPaymentId ? s.request?.key : undefined;
   useEffect(() => {
-    setCheckingKakaoPayment(false);
-    if (!watchedPaymentId) return;
+    setKakaoCheckStatus('idle');
+    if (!watchedPaymentId && !watchedRequestKey) return;
     const currentPage = pageGuard();
     const revision = s.revision;
     let active = true;
     let first = true;
-    const watcher = watchPaymentReturn(async manual => {
-      const isCurrent = () => active && currentPage() && live.current.revision === revision &&
-        live.current.payment?.id === watchedPaymentId;
+    const isCurrent = () => active && currentPage() && live.current.revision === revision &&
+      live.current.payment?.id === watchedPaymentId &&
+      (!!watchedPaymentId || live.current.request?.key === watchedRequestKey);
+    const watcher = watchPaymentReturn(async read => {
       if (!isCurrent()) return true;
-      const announceCheck = manual || (first && s.flow === 'P02-V');
+      const state = live.current;
+      const announceCheck = read.manual || (first && s.flow === 'P02-V');
       first = false;
-      if (announceCheck) setCheckingKakaoPayment(true);
+      if (announceCheck) setKakaoCheckStatus('checking');
+      let checked = false;
       try {
-        const result = await advancePayment(live.current, isCurrent);
+        // Lost preparation responses are replayed with the stored key only by an explicit check.
+        const result = await advancePayment(watchedPaymentId ? state : { ...state, retryVerification: true }, isCurrent);
         if (!result || !isCurrent()) return true;
+        checked = true;
         dispatch(result);
         return result.type === 'PAYMENT_RESULT' &&
           (!!result.order || ['cancelled', 'failed', 'expired'].includes(result.payment.state));
       } finally {
-        if (announceCheck && isCurrent()) setCheckingKakaoPayment(false);
+        if ((announceCheck || read.manual) && isCurrent())
+          setKakaoCheckStatus(checked ? 'checked' : 'unavailable');
       }
-    }, s.flow === 'P02-V');
+    }, s.flow === 'P02-V', window, document, {
+      automatic: !!watchedPaymentId,
+      onManualInterrupted: () => { if (isCurrent()) setKakaoCheckStatus('unavailable'); },
+    });
     paymentWatcher.current = watcher;
     return () => {
       active = false;
       watcher.close();
       paymentWatcher.current = null;
     };
-  }, [watchedPaymentId, s.flow, s.revision]);
+  }, [watchedPaymentId, watchedRequestKey, s.flow, s.revision]);
   useEffect(() => {
     const active = discovery.current;
     if (active && (s.flow !== 'V5-01' || s.revision !== active.revision)) {
@@ -333,8 +342,8 @@ export function useApp() {
     dispatch,
     busy: busy || checkingPayment,
     listening,
-    checkingKakaoPayment,
-    checkKakaoPayment: () => paymentWatcher.current?.checkNow(),
+    kakaoCheckStatus,
+    checkKakaoPayment: () => setKakaoCheckStatus(paymentWatcher.current?.checkNow() ? 'checking' : 'unavailable'),
     openKakaoCheckout: leaveForKakaoCheckout,
     speak,
     discover,

@@ -77,6 +77,7 @@ export type Payment = {
   snapshot: Quote;
   orderId?: string;
   redirect?: string | null;
+  failureReason?: 'preparation';
   checkoutAvailable?: { pc: boolean; mobile: boolean };
   created?: number;
 };

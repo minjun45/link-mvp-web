@@ -61,6 +61,16 @@
 
 `/api/*`, `/checkout/*`, `/return/*`와 QA 접속·복귀 안내를 Render로 전달하는 규칙을 정적 산출물 라우팅 앞에 둡니다. 결제 응답은 캐시를 금지하고 같은 출처의 호스트 전용 쿠키를 사용합니다. Render는 설정된 두 호스트와 고정 QA Origin을 확인하며 전달된 프록시 헤더로 복귀 URL이나 권한을 결정하지 않습니다. [Vercel 외부 Rewrite](https://vercel.com/docs/routing/rewrites) · [Build Output API 설정](https://vercel.com/docs/build-output-api/configuration) · [Vercel Git 배포](https://vercel.com/docs/deployments/git) · [Vercel 시스템 환경변수](https://vercel.com/docs/environment-variables/system-environment-variables) · [Vercel 배포 보호](https://vercel.com/docs/deployment-protection) · [Vercel Hobby 이용약관](https://vercel.com/legal/terms) · [카카오페이 연동 가이드](https://developers.kakaopay.com/docs/payment/online/common)
 
+## 준비 실패 거래 복구
+
+1. QA용 Vercel과 Render가 승인된 결제 복구 커밋을 실행하는지 확인합니다. Render는 기존 서비스에서 **Manual Deploy → Deploy a specific commit**을 선택합니다. 공개 모드, 카카오페이 개발 키, SQLite 경로와 디스크는 유지합니다.
+2. 기존 거래를 만든 브라우저에서 QA 주소를 다시 열고 결과를 확인합니다. 자동 확인을 기다리거나 **결제 결과 다시 확인**을 누릅니다. 거래 ID를 받기 전에 연결이 끊겼다면 수동 확인은 저장된 동일 요청 키로만 다시 확인합니다.
+3. **결제 준비 실패**가 나오면 **장바구니로 돌아가기**를 눌러 기존 메뉴와 금액을 확인한 뒤 새 결제를 시작합니다. 이미 열 수 있는 결제창이 있었거나 승인 여부가 불확실하면 기존 거래 조회를 계속 사용합니다.
+
+준비 응답 유실, 사용할 수 있는 결제창이 없었던 준비 실패, 중단된 준비 레코드는 실제로 승인 경로에 도달할 수 없고 승인 시도·승인 정보·주문이 없을 때만 종료합니다. 기존 요청 키를 재사용해 새 거래를 만들지 않으며 실패 레코드는 보존합니다. 승인 응답 유실은 원래 TID로 주문을 조회합니다. [카카오페이 준비·승인 응답 유실 안내](https://developers.kakaopay.com/forum/t/topic/180/2)
+
+LINK는 같은 탭에서 PC·모바일에 해당하는 카카오페이 URL로 이동합니다. 모의 브리지로 확인한 뒤 실제 교차 탭이나 카카오톡 앱 전환은 실기기에서 확인합니다. 다른 브라우저나 앱에서 복귀 화면이 열리면 주문을 시작한 원래 탭에서 **결제 결과 다시 확인**을 사용합니다. 서버 진단 로그에는 작업 단계, 실패 분류, 제공된 HTTP 상태, 수치 형식의 오류 코드와 URL 유효성 검사 결과만 남깁니다. [카카오페이 브라우저 이동 안내](https://developers.kakaopay.com/forum/t/topic/435) · [카카오페이 오류 코드](https://developers.kakaopay.com/docs/getting-started/api-common-guide/error-code)
+
 ## 공유 전 통합 검증
 
 - [ ] Render `/healthz`가 준비된 상태에서 200을 반환하고, 디스크가 문제일 때 새 결제 준비가 거부되는지 확인
@@ -71,7 +81,7 @@
 - [ ] 플랫폼 로그를 테스트 거래 한 건으로 점검. 복귀 요청 쿼리나 토큰이 일반 테스터·외부 로그 수집기에 노출되지 않아야 함. 필요하면 로그 포워딩을 끄고 접근 권한·보존을 제한
 - [ ] GitHub, Render, Vercel 계정 MFA와 저장소 접근 범위를 점검. 비공개 모드에서는 승인된 참여자에게 키를 별도로 전달하고, 공개 모드에서는 운영 시간과 키 인증 복구 조건을 확인
 
-접근 키는 입장만 제한합니다. 결제와 주문은 서로 다른 익명 세션으로 분리되며, 호스트를 변경하거나 쿠키를 지우면 기존 세션을 되찾을 수 없습니다. 승인 결과가 불확실하면 같은 거래를 조회합니다. TID 없는 준비 유실은 동일 세션에서 새 거래를 차단합니다. 카카오페이 자체의 결제 화면이나 운영용 인증 접근성은 실기기 테스트에서 확인합니다.
+접근 키는 입장만 제한합니다. 결제와 주문은 서로 다른 익명 세션으로 분리되며, 호스트를 변경하거나 쿠키를 지우면 기존 세션을 되찾을 수 없습니다. 승인 결과가 불확실하면 같은 거래를 조회합니다. 결제 준비 실패가 확정된 거래는 같은 브라우저에서 장바구니로 돌아가 다시 시작할 수 있습니다. 카카오페이 자체의 결제 화면이나 운영용 인증 접근성은 실기기 테스트에서 확인합니다.
 
 ## 비용과 종료
 

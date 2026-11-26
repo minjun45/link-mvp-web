@@ -94,6 +94,20 @@ export class PaymentDatabase {
     return this.payment('payments.callbackId = ?', id);
   }
 
+  pending(owner: string) {
+    return this.payment(`payments.owner = ? AND payments.state IN (${waiting})`, owner);
+  }
+
+  failUnopened(owner: string, id: string) {
+    return this.db.prepare(`
+      UPDATE payments SET state = 'failed'
+      WHERE owner = ? AND id = ? AND state IN ('preparing', 'review')
+        AND attempted = 0 AND aid IS NULL AND mismatch = 0
+        AND (tid IS NULL OR (pc IS NULL AND mobile IS NULL))
+        AND NOT EXISTS (SELECT 1 FROM orders WHERE orders.paymentId = payments.id)
+    `).run(owner, id).changes === 1;
+  }
+
   reserve(owner: string, key: string, snapshot: Quote, item: string, created: number) {
     const id = token();
     // The unique request key and partial index protect both retries and new keys from other tabs.
@@ -106,9 +120,12 @@ export class PaymentDatabase {
 
   storeReady(id: string, response: { tid?: string; pc?: string; mobile?: string }) {
     const tid = response.tid ?? null;
-    const state = tid && (response.pc || response.mobile) ? 'ready' : 'review';
+    const state = tid && (response.pc || response.mobile) ? 'ready' : 'failed';
     this.db.prepare(`
-      UPDATE payments SET tid = ?, pc = ?, mobile = ?, state = ? WHERE id = ? AND state = 'preparing'
+      UPDATE payments SET tid = ?, pc = ?, mobile = ?, state = ?
+      WHERE id = ? AND state = 'preparing' AND tid IS NULL AND pc IS NULL AND mobile IS NULL
+        AND attempted = 0 AND aid IS NULL AND mismatch = 0
+        AND NOT EXISTS (SELECT 1 FROM orders WHERE orders.paymentId = payments.id)
     `).run(tid, response.pc ?? null, response.mobile ?? null, state, id);
   }
 

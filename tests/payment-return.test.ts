@@ -114,9 +114,9 @@ test('coalesces page show, focus, visibility and manual reads into a bounded for
   pageShow(false);
   browser.dispatchEvent(new Event('focus'));
   page.dispatchEvent(new Event('visibilitychange'));
-  watcher.checkNow();
+  expect(watcher.checkNow()).toBe(true);
   await vi.advanceTimersByTimeAsync(0);
-  expect(check).toHaveBeenCalledTimes(1);
+  expect(check).toHaveBeenCalledExactlyOnceWith({ manual: true });
   for (let count = 0; count < 10; count++) browser.dispatchEvent(new Event('focus'));
   await vi.advanceTimersByTimeAsync(2500);
   expect(check).toHaveBeenCalledTimes(1);
@@ -124,6 +124,63 @@ test('coalesces page show, focus, visibility and manual reads into a bounded for
   await vi.advanceTimersByTimeAsync(6000);
   expect(check).toHaveBeenCalledTimes(3);
   watcher.close();
+});
+
+test('manual input adopts the in-flight automatic read and observes its completion', async () => {
+  vi.useFakeTimers();
+  const { browser, page } = lifecycle();
+  const waiting = deferred<void>();
+  const finished = vi.fn();
+  const check = vi.fn(async (read: { manual: boolean }) => {
+    await waiting.promise;
+    finished(read.manual);
+    return false;
+  });
+  const watcher = watchPaymentReturn(check, true, browser, page);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(check).toHaveBeenCalledWith({ manual: false });
+  expect(watcher.checkNow()).toBe(true);
+  expect(watcher.checkNow()).toBe(true);
+  expect(check).toHaveBeenCalledTimes(1);
+  waiting.resolve();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(finished).toHaveBeenCalledExactlyOnceWith(true);
+  expect(check).toHaveBeenCalledTimes(1);
+  watcher.close();
+});
+
+test('reports an offline manual request, clears an interrupted timer and allows a retry after a rejected check', async () => {
+  vi.useFakeTimers();
+  const { browser, page, pageShow } = lifecycle();
+  const check = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(false);
+  const onManualInterrupted = vi.fn();
+  const watcher = watchPaymentReturn(check, true, browser, page, { automatic: false, onManualInterrupted });
+  pageShow(false);
+  browser.dispatchEvent(new Event('focus'));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(check).not.toHaveBeenCalled();
+  expect(watcher.checkNow()).toBe(true);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(check).toHaveBeenCalledExactlyOnceWith({ manual: true });
+
+  // Force a second request to wait in the throttle interval, then interrupt it.
+  expect(watcher.checkNow()).toBe(true);
+  browser.navigator.onLine = false;
+  browser.dispatchEvent(new Event('offline'));
+  expect(onManualInterrupted).toHaveBeenCalledTimes(1);
+  expect(watcher.checkNow()).toBe(false);
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(check).toHaveBeenCalledTimes(1);
+
+  browser.navigator.onLine = true;
+  browser.dispatchEvent(new Event('online'));
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(check).toHaveBeenCalledTimes(1);
+  expect(watcher.checkNow()).toBe(true);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(check).toHaveBeenCalledTimes(2);
+  watcher.close();
+  expect(watcher.checkNow()).toBe(false);
 });
 
 test('waits for resumed hydration, skips background reads and wakes after the network reconnects', async () => {

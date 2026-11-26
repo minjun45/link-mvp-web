@@ -123,6 +123,7 @@ export function createKakaoPayLocalServer({
   const sessionCookie = qa ? '__Host-link_kakaopay_session' : COOKIE;
   const provider = createKakaoPayClient(options);
   const checks = new Map<string, Promise<void>>();
+  const preparing = new Set<string>();
   const appPage = distDir
     ? readFileSync(join(distDir, 'index.html'), 'utf8').replace('<head>', '<head><meta name="link-kakaopay-test" content="enabled">')
     : undefined;
@@ -149,11 +150,21 @@ export function createKakaoPayLocalServer({
     return () => { gatewayActive[lane]--; };
   }
 
+  function recoverUnopened(tx: DatabasePayment): DatabasePayment {
+    // The ready reservation and this process's in-flight marker are installed before any await.
+    if (!preparing.has(tx.id) && ['preparing', 'review'].includes(tx.state) && database.failUnopened(tx.owner, tx.id))
+      return { ...tx, state: 'failed' };
+    return tx;
+  }
+
   function view(tx: DatabasePayment): Payment {
     const state = tx.state === 'preparing' || (tx.state === 'ready' && now() - tx.created >= READY_WINDOW_MS)
       ? 'review' : tx.state;
+    const preparationFailed = state === 'failed' && tx.attempted === 0 && tx.aid === null &&
+      tx.mismatch === 0 && !tx.orderId && (tx.tid === null || (tx.pc === null && tx.mobile === null));
     return {
       id: tx.id, state, provider: KAKAO_TEST_PROVIDER, snapshot: JSON.parse(tx.snapshot) as Quote,
+      ...(preparationFailed ? { failureReason: 'preparation' as const } : {}),
       created: tx.created, orderId: tx.orderId ?? undefined,
       redirect: state === 'ready' ? `${origin}/checkout/${tx.id}` : undefined,
       checkoutAvailable: { pc: !!kakaoRedirect(tx.pc), mobile: !!kakaoRedirect(tx.mobile) },
@@ -227,7 +238,7 @@ export function createKakaoPayLocalServer({
         error(res, 409, '기존 결제 금액과 주문 내용을 확인해 주세요.');
         return;
       }
-      json(res, 200, receipt);
+      json(res, 200, view(recoverUnopened(previous)));
       return;
     }
 
@@ -244,6 +255,11 @@ export function createKakaoPayLocalServer({
     }
     const item = priced.items[0].name + (priced.items.length > 1 ? ` 외 ${priced.items.length - 1}종` : '');
     qa?.checkDisk();
+    const pending = database.pending(owner);
+    if (pending && recoverUnopened(pending).state !== 'failed') {
+      error(res, 409, '이전에 시작한 결제 결과를 먼저 확인해 주세요.');
+      return;
+    }
     const release = gatewaySlot('ready', owner);
     try {
       const tx = database.reserve(owner, body.key, priced, item, now());
@@ -253,10 +269,15 @@ export function createKakaoPayLocalServer({
         else error(res, 409, '이전에 시작한 결제 결과를 먼저 확인해 주세요.');
         return;
       }
-      // The TID reaches durable storage before a checkout link becomes available.
-      const result = await provider.ready(trade(tx), origin, tx.callbackId);
-      database.storeReady(tx.id, result);
-      json(res, 200, view(database.byId(owner, tx.id)!));
+      preparing.add(tx.id);
+      try {
+        // The TID and usable URL reach durable storage before the checkout link is exposed.
+        const result = await provider.ready(trade(tx), origin, tx.callbackId);
+        database.storeReady(tx.id, result);
+        json(res, 200, view(database.byId(owner, tx.id)!));
+      } finally {
+        preparing.delete(tx.id);
+      }
     } finally {
       release();
     }
@@ -331,14 +352,16 @@ export function createKakaoPayLocalServer({
       if (!publicAccess && limited()) return resultPage(res, false);
       const id = path.slice('/checkout/'.length);
       const tx = sessionId && ID.test(id) ? database.byId(sessionId, id) : undefined;
-      if (!tx?.tid || (publicAccess && (limited('session:' + tx.owner, 120) || limited())))
+      if (!tx || (publicAccess && (limited('session:' + tx.owner, 120) || limited())))
         return resultPage(res, false);
       if (tx.state !== 'ready' || now() - tx.created >= READY_WINDOW_MS) return redirect(res, '/');
+      if (!tx.tid) return resultPage(res, false);
       const detected = paymentChannel({
         userAgent: req.headers['user-agent'],
         userAgentData: { mobile: req.headers['sec-ch-ua-mobile'] === '?1' },
       });
-      const channel = url.searchParams.get('channel') === 'mobile' ? 'mobile' : detected;
+      const specified = url.searchParams.get('channel');
+      const channel = specified === 'pc' || specified === 'mobile' ? specified : detected;
       const link = kakaoRedirect(tx[channel]);
       if (link) return redirect(res, link);
       return html(res, 409, `<!doctype html><html lang="ko"><meta charset="utf-8">
@@ -393,7 +416,9 @@ export function createKakaoPayLocalServer({
       if (req.method === 'GET' && paymentPath) {
         const tx = database.byId(session.id, paymentPath[1]);
         if (!tx) return error(res, 404, '결제 정보를 찾을 수 없어요.');
-        await refresh(tx);
+        const recovered = recoverUnopened(tx);
+        if (recovered.state === 'failed') return json(res, 200, view(recovered));
+        await refresh(recovered);
         return json(res, 200, view(database.byId(session.id, tx.id)!));
       }
       const orderPath = /^\/api\/orders\/([a-f0-9]{64})$/.exec(path);
@@ -436,6 +461,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     connection?.close();
   };
   const hosted = process.argv[2] === '--qa';
+  const report: KakaoOptions['report'] = diagnostic => console.warn('[KakaoPay] ' + JSON.stringify(diagnostic));
   try {
     let server;
     let port = 3000;
@@ -447,7 +473,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
       checkDisk();
       database = new PaymentDatabase(databasePath);
       database.check();
-      server = createKakaoPayLocalServer({ database, devKey, qa: { ...settings, checkDisk } });
+      server = createKakaoPayLocalServer({ database, devKey, report, qa: { ...settings, checkDisk } });
       port = settings.port;
       bind = '0.0.0.0';
     } else {
@@ -458,7 +484,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
       const path = join(directory, 'kakaopay-local.sqlite');
       if (!outsideRepo(directory) || (existsSync(path) && !outsideRepo(realpathSync(path)))) throw new Error();
       database = new PaymentDatabase(path);
-      server = createKakaoPayLocalServer({ database, distDir, devKey });
+      server = createKakaoPayLocalServer({ database, distDir, devKey, report });
     }
     server.once('close', closeDatabase);
     server.once('error', () => {
