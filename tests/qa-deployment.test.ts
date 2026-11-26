@@ -63,6 +63,16 @@ test('QA settings reject production, malformed origins, weak access keys and abs
   ]) expect(() => qaSettings({ ...valid, ...input })).toThrow('Invalid QA server configuration');
 });
 
+test('only the exact true value enables public access and the private access key stays required', () => {
+  const valid = environment();
+  expect(qaSettings({ ...valid, LINK_QA_PUBLIC_ACCESS: 'true' }).publicAccess).toBe(true);
+  for (const value of [undefined, 'false', '', 'TRUE', ' true ', '1', 'yes']) {
+    expect(qaSettings({ ...valid, LINK_QA_PUBLIC_ACCESS: value }).publicAccess).toBe(false);
+  }
+  expect(() => qaSettings({ ...valid, LINK_QA_PUBLIC_ACCESS: 'true', LINK_QA_ACCESS_KEY: undefined }))
+    .toThrow('Invalid QA server configuration');
+});
+
 test('requires a separate writable persistent mount, beyond mere directory creation', () => {
   const dir = scratch();
   const file = join(dir, 'qa.sqlite');

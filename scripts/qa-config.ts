@@ -27,7 +27,8 @@ export function qaSettings(env: NodeJS.ProcessEnv) {
       !databasePath || !Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error('Invalid QA server configuration');
   }
-  return { origin, upstream, accessKey, devKey, databasePath, port };
+  const publicAccess = env.LINK_QA_PUBLIC_ACCESS === 'true';
+  return { origin, upstream, accessKey, devKey, databasePath, port, publicAccess };
 }
 
 export function verifyQaDisk(

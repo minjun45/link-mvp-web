@@ -114,11 +114,12 @@ export function createKakaoPayLocalServer({
   database, distDir, qa, now = Date.now, ...options
 }: KakaoOptions & {
   database: PaymentDatabase; distDir?: string; now?: () => number;
-  qa?: { origin: string; upstream: string; accessKey: string; checkDisk: () => void };
+  qa?: { origin: string; upstream: string; accessKey: string; publicAccess: boolean; checkDisk: () => void };
 }) {
   const origin = qa?.origin ?? KAKAO_TEST_ORIGIN;
   const hosts = new Set([new URL(origin).host, ...(qa ? [new URL(qa.upstream).host] : [])]);
-  const gate = qa ? qaAccess(qa.accessKey, now) : undefined;
+  const publicAccess = qa?.publicAccess === true;
+  const gate = qa && !publicAccess ? qaAccess(qa.accessKey, now) : undefined;
   const sessionCookie = qa ? '__Host-link_kakaopay_session' : COOKIE;
   const provider = createKakaoPayClient(options);
   const checks = new Map<string, Promise<void>>();
@@ -283,6 +284,11 @@ export function createKakaoPayLocalServer({
       }
     }
 
+    if (publicAccess && path === '/qa-access') {
+      if (req.method === 'GET' || req.method === 'POST') return redirect(res, origin + '/');
+      return res.writeHead(405, { Allow: 'GET, POST' }).end();
+    }
+
     if (gate && path === '/qa-access') {
       if (req.method === 'GET') {
         if (allowed) return redirect(res, '/');
@@ -322,10 +328,11 @@ export function createKakaoPayLocalServer({
 
     if (req.method === 'GET' && path.startsWith('/checkout/')) {
       if (!allowed) return redirect(res, '/qa-access');
-      if (limited()) return resultPage(res, false);
+      if (!publicAccess && limited()) return resultPage(res, false);
       const id = path.slice('/checkout/'.length);
       const tx = sessionId && ID.test(id) ? database.byId(sessionId, id) : undefined;
-      if (!tx?.tid) return resultPage(res, false);
+      if (!tx?.tid || (publicAccess && (limited('session:' + tx.owner, 120) || limited())))
+        return resultPage(res, false);
       if (tx.state !== 'ready' || now() - tx.created >= READY_WINDOW_MS) return redirect(res, '/');
       const detected = paymentChannel({
         userAgent: req.headers['user-agent'],
@@ -348,11 +355,16 @@ export function createKakaoPayLocalServer({
           (req.headers.origin !== undefined && req.headers.origin !== origin))
         return error(res, 403, 'LINK 테스트 화면에서 다시 시도해 주세요.');
       if (!allowed) return error(res, 401, 'QA 접속 키를 확인해 주세요.');
-      if (limited()) return error(res, 429, '요청이 많아요. 잠시 뒤 다시 확인해 주세요.');
+      const config = req.method === 'GET' && path === '/api/config';
+      if (!publicAccess && limited()) return error(res, 429, '요청이 많아요. 잠시 뒤 다시 확인해 주세요.');
       const session = sessionId ? database.session(sessionId) : undefined;
       if (qa && session && limited('session:' + session.id, 120))
         return error(res, 429, '요청이 많아요. 잠시 뒤 다시 확인해 주세요.');
-      if (req.method === 'GET' && path === '/api/config') {
+      // Rejected public bootstraps and unknown sessions must not spend the existing session request budget.
+      if (publicAccess && (session || config) && ((!session && limited('public-session', 30)) || limited()))
+        return error(res, 429, '요청이 많아요. 잠시 뒤 다시 확인해 주세요.');
+      if (config) {
+        if (publicAccess && !session) qa?.checkDisk();
         const owner = session ?? database.newSession();
         if (!session)
           res.setHeader('Set-Cookie', `${sessionCookie}=${owner.id}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000${qa ? '; Secure' : ''}`);

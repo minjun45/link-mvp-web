@@ -37,7 +37,7 @@ type GatewayRequest = Record<string, unknown>;
 type GatewayPayment = { ready: GatewayRequest; tid: string; status: string };
 type Reply = { status: number; headers: IncomingHttpHeaders; body: string };
 
-async function fixture(withFile = false, hosted = false) {
+async function fixture(withFile = false, hosted = false, publicAccess = false) {
   const directory = withFile ? mkdtempSync(join(tmpdir(), 'link-kakao-sqlite-test-')) : undefined;
   const filename = directory ? join(directory, 'payments.sqlite') : ':memory:';
   const credential = randomUUID();
@@ -45,7 +45,7 @@ async function fixture(withFile = false, hosted = false) {
   const origin = hosted ? QA_ORIGIN : KAKAO_TEST_ORIGIN;
   const calls: { name: string; payload: GatewayRequest }[] = [];
   const gateway = new Map<string, GatewayPayment>();
-  const scenario = { readyLost: false, approvalLost: false, orderOffline: false, wrongTotal: false,
+  const scenario = { publicAccess, readyLost: false, approvalLost: false, orderOffline: false, wrongTotal: false,
     clock: Date.parse(STAMP), waitReady: undefined as Promise<void> | undefined,
     pc: PC as string | undefined, mobile: MOBILE as string | undefined, diskReady: true };
   let latest: GatewayPayment | undefined;
@@ -92,7 +92,7 @@ async function fixture(withFile = false, hosted = false) {
   async function start() {
     database = new PaymentDatabase(filename);
     const qa = hosted ? {
-      origin, upstream: QA_UPSTREAM, accessKey: gateKey,
+      origin, upstream: QA_UPSTREAM, accessKey: gateKey, publicAccess: scenario.publicAccess,
       checkDisk: () => { if (!scenario.diskReady) throw new Error('disk unavailable'); },
     } : undefined;
     server = createKakaoPayLocalServer({ database, transport, devKey: credential, qa, now: () => scenario.clock });
@@ -141,7 +141,7 @@ async function fixture(withFile = false, hosted = false) {
 
   async function browser(initialCookie = '') {
     let cookie = initialCookie;
-    if (hosted && !cookie) cookie = (await login()).headers['set-cookie']![0].split(';')[0];
+    if (hosted && !scenario.publicAccess && !cookie) cookie = (await login()).headers['set-cookie']![0].split(';')[0];
     const config = await send('/api/config', { headers: { 'X-Link-Kakao-Test': '1', Cookie: cookie } });
     if (config.headers['set-cookie']) cookie = [cookie, config.headers['set-cookie'][0].split(';')[0]].filter(Boolean).join('; ');
     const { csrf } = JSON.parse(config.body);
@@ -216,8 +216,111 @@ test('hosted QA requires the access cookie even at the Render origin and keeps r
   expect(fx.operations()).toEqual(['ready', 'approve', 'order']);
 });
 
-test('limits hosted gateway concurrency before a transaction reservation', async () => {
-  const fx = await fixture(false, true);
+test('public QA accepts the deployed frontend bootstrap without an access cookie', async () => {
+  const fx = await fixture(false, true, true);
+  const headers = { 'X-Link-Kakao-Test': '1', 'Sec-Fetch-Site': 'same-origin' };
+  for (const host of [new URL(QA_ORIGIN).host, new URL(QA_UPSTREAM).host]) {
+    const page = await fx.send('/qa-access', { headers: { Host: host } });
+    expect(page).toMatchObject({ status: 303, body: '', headers: { location: QA_ORIGIN + '/' } });
+    expect(page.headers['set-cookie']).toBeUndefined();
+  }
+  expect(await fx.login('old-form')).toMatchObject({ status: 303, headers: { location: QA_ORIGIN + '/' } });
+  expect((await fx.send('/api/config')).status).toBe(403);
+  expect((await fx.send('/api/config', { headers: { ...headers, Origin: QA_UPSTREAM } })).status).toBe(403);
+  expect((await fx.send('/api/config', { headers: { ...headers, 'Sec-Fetch-Site': 'cross-site' } })).status).toBe(403);
+
+  const owner = await fx.browser();
+  expect(owner.config.status).toBe(200);
+  expect(JSON.parse(owner.config.body)).toEqual({ kakaopayTest: true, csrf: owner.csrf });
+  expect(owner.cookie).toMatch(/^__Host-link_kakaopay_session=[a-f0-9]{64}$/);
+  expect(owner.config.headers['set-cookie']![0]).toContain('Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000; Secure');
+  expect((await owner.api('/stores')).status).toBe(200);
+  const outsider = await fx.browser();
+  expect(outsider.cookie).not.toBe(owner.cookie);
+  expect((await owner.api('/payments', checkout, { 'X-Link-CSRF': outsider.csrf })).status).toBe(403);
+  expect((await owner.api('/payments', { ...checkout, expected: { ...expected, total: 1 } })).status).toBe(409);
+  expect(fx.operations()).toEqual([]);
+  const payment = await owner.prepare();
+  const path = new URL(payment.redirect!).pathname;
+  expect((await owner.navigate(path)).headers.location).toBe(PC);
+  expect((await owner.navigate(path + '?channel=mobile')).headers.location).toBe(MOBILE);
+  expect((await outsider.navigate(path)).status).toBe(404);
+  expect((await outsider.api('/payments/' + payment.id)).status).toBe(404);
+  expect((await owner.navigate(fx.returnPath())).headers.location).toBe('/');
+  const approved = await owner.payment(payment.id);
+  expect(approved.state).toBe('approved');
+  expect((await outsider.api('/orders/' + approved.orderId)).status).toBe(404);
+  expect(fx.operations()).toEqual(['ready', 'approve', 'order']);
+});
+
+test('a disk-backed order and pending payment survive both QA access mode changes', async () => {
+  const fx = await fixture(true, true);
+  const owner = await fx.browser();
+  const completed = await owner.prepare();
+  await owner.navigate(fx.returnPath());
+  const approved = await owner.payment(completed.id);
+  const order = await owner.order(approved.orderId!);
+  const pendingRequest = { ...checkout, key: 'pending-mode-switch' };
+  const pending = await owner.prepare(pendingRequest);
+  const anonymousCookie = owner.cookie.split('; ').find(cookie => cookie.startsWith('__Host-link_kakaopay_session='))!;
+
+  fx.scenario.publicAccess = true;
+  await fx.restart();
+  const publicOwner = await fx.browser(anonymousCookie);
+  expect(publicOwner.config.status).toBe(200);
+  expect(publicOwner.config.headers['set-cookie']).toBeUndefined();
+  expect(publicOwner.csrf).toBe(owner.csrf);
+  expect(await publicOwner.order(order.id)).toEqual(order);
+  expect(await publicOwner.payment(pending.id)).toEqual(pending);
+  expect(await publicOwner.prepare(pendingRequest)).toEqual(pending);
+
+  fx.scenario.publicAccess = false;
+  await fx.restart();
+  expect((await publicOwner.api('/orders/' + order.id)).status).toBe(401);
+  expect((await publicOwner.navigate(new URL(pending.redirect!).pathname)).headers.location).toBe('/qa-access');
+  const gate = (await fx.login()).headers['set-cookie']![0].split(';')[0];
+  const privateOwner = await fx.browser(gate + '; ' + anonymousCookie);
+  expect(privateOwner.csrf).toBe(owner.csrf);
+  expect(await privateOwner.order(order.id)).toEqual(order);
+  expect(await privateOwner.prepare(pendingRequest)).toEqual(pending);
+  await privateOwner.navigate(fx.returnPath());
+  const settled = await privateOwner.payment(pending.id);
+  expect(settled.state).toBe('approved');
+  expect((await privateOwner.order(settled.orderId!)).number).not.toBe(order.number);
+  expect(fx.operations().filter(operation => operation === 'ready')).toHaveLength(2);
+  expect(fx.operations().filter(operation => operation === 'approve')).toHaveLength(2);
+});
+
+test('caps new public sessions without spending the request budget of existing sessions', async () => {
+  const fx = await fixture(true, true, true);
+  const owner = await fx.browser();
+  const headers = { 'X-Link-Kakao-Test': '1' };
+  for (let i = 1; i < 30; i++) expect((await fx.send('/api/config', { headers })).status).toBe(200);
+  const unknownCookie = '__Host-link_kakaopay_session=' + '0'.repeat(64);
+  for (let i = 0; i < 601; i++) {
+    const reply = await fx.send('/api/config', { headers: { ...headers, Cookie: unknownCookie } });
+    expect(reply.status).toBe(429);
+    expect(reply.headers['set-cookie']).toBeUndefined();
+  }
+  const db = new DatabaseSync(fx.filename, { readOnly: true });
+  try {
+    expect(db.prepare('SELECT COUNT(*) AS count FROM sessions').get()?.count).toBe(30);
+  } finally {
+    db.close();
+  }
+  expect((await owner.api('/stores')).status).toBe(200);
+  expect((await owner.api('/config')).headers['set-cookie']).toBeUndefined();
+  fx.scenario.clock += 60_000;
+  fx.scenario.diskReady = false;
+  expect((await fx.send('/api/config', { headers })).status).toBe(503);
+  expect((await owner.api('/config')).status).toBe(200);
+  fx.scenario.diskReady = true;
+  expect((await fx.send('/api/config', { headers })).status).toBe(200);
+  expect(fx.operations()).toEqual([]);
+}, 10_000);
+
+test.each([false, true])('limits hosted gateway concurrency before a transaction reservation (public mode: %s)', async publicAccess => {
+  const fx = await fixture(false, true, publicAccess);
   const first = await fx.browser();
   const second = await fx.browser();
   const third = await fx.browser();
@@ -423,10 +526,13 @@ test('serializes duplicate preparations and approvals with one durable order', a
   expect((await owner.order(result.orderId!)).number).toBe('A-0001');
 });
 
-test.each([['cancel', 'QUIT_PAYMENT', 'cancelled'], ['fail', 'FAIL_PAYMENT', 'failed']])(
-  'only recognizes %s after the gateway confirms it',
-  async (path, remote, terminal) => {
-    const fx = await fixture();
+test.each([
+  ['cancel', 'QUIT_PAYMENT', 'cancelled', false], ['fail', 'FAIL_PAYMENT', 'failed', false],
+  ['cancel', 'QUIT_PAYMENT', 'cancelled', true], ['fail', 'FAIL_PAYMENT', 'failed', true],
+])(
+  'only recognizes %s after the gateway confirms %s as %s (public mode: %s)',
+  async (path, remote, terminal, publicAccess) => {
+    const fx = await fixture(false, publicAccess, publicAccess);
     const owner = await fx.browser();
     const payment = await owner.prepare();
     await owner.navigate(fx.returnPath(path));
