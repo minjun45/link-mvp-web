@@ -1,10 +1,10 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
 import { catalogConnection, initial, reduce, snapshot, type Action } from '../core/flow';
-import { KAKAO_TEST_PROVIDER, type State } from '../core/types';
+import { KAKAO_TEST_PROVIDER, type Snapshot, type State } from '../core/types';
 import { paymentMatchesRequest } from '../core/domain';
 import { isOrder, isPayment } from '../core/savedData';
 import * as Device from '../native/browserDevice';
-import { persist, readSnapshot } from './storage';
+import { persist, readSnapshot, SnapshotConflict } from './storage';
 import * as api from './api';
 import { startDiscovery } from './discovery';
 import { advancePayment, canOpenKakaoPayment, openKakaoCheckout, paymentResult } from './checkout';
@@ -19,8 +19,14 @@ export function useApp() {
   const [kakaoCheckStatus, setKakaoCheckStatus] = useState<'idle' | 'checking' | 'checked' | 'unavailable'>('idle');
   const openingKakao = useRef(false);
   const paymentWatcher = useRef<ReturnType<typeof watchPaymentReturn> | null>(null);
-  const page = useRef({ epoch: 0, suspended: false, resumeRevision: undefined as number | undefined,
-    resumedState: undefined as State | undefined });
+  const page = useRef({ epoch: 0, suspended: false, resumeRevision: undefined as number | undefined });
+  const presented = useRef<Snapshot | undefined>(undefined);
+  const reloadStored = useRef<((conflict?: boolean) => void) | undefined>(undefined);
+  const handleConflict = (error: unknown) => {
+    if (!(error instanceof SnapshotConflict)) return false;
+    reloadStored.current?.(true);
+    return true;
+  };
   function pageGuard() {
     const epoch = page.current.epoch;
     return () => !page.current.suspended && page.current.epoch === epoch;
@@ -43,33 +49,37 @@ export function useApp() {
     let active = true;
     const kakaoOrigin = api.kakaoPageOrigin();
     const kakaoPage = !!kakaoOrigin;
-    async function hydrate(resumed = false) {
+    async function hydrate(resumed = false, conflict = false) {
       const epoch = page.current.epoch;
       const saved = await readSnapshot().catch(() => null);
       if (!active || page.current.epoch !== epoch) return;
+      presented.current = undefined;
       if (resumed) page.current.resumeRevision = live.current.revision + 1;
       dispatch({
         type: 'HYDRATE', snapshot: saved, kakaoTest: kakaoPage, kakaoOrigin, resumed,
         stores: api.stores, products: api.products,
       });
+      if (conflict && saved !== null) dispatch({ type: 'STORAGE_ERROR', message: '다른 탭에서 변경된 최신 주문을 불러왔어요.' });
     }
     const onPageHide = () => {
       page.current.epoch++;
       page.current.suspended = true;
     };
-    const onPageShow = (event: PageTransitionEvent) => {
-      if (!event.persisted) return;
+    const resync = (conflict = false) => {
       // Re-read while the old render and its queued writes are still suspended.
       onPageHide();
-      void hydrate(true);
+      void hydrate(true, conflict);
     };
-    if (kakaoPage) {
-      window.addEventListener('pagehide', onPageHide);
-      window.addEventListener('pageshow', onPageShow);
-    }
+    reloadStored.current = resync;
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) resync();
+    };
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('pageshow', onPageShow);
     void hydrate();
     return () => {
       active = false;
+      reloadStored.current = undefined;
       window.removeEventListener('pagehide', onPageHide);
       window.removeEventListener('pageshow', onPageShow);
       discovery.current?.stop();
@@ -80,18 +90,17 @@ export function useApp() {
     if (page.current.resumeRevision !== s.revision) return;
     page.current.resumeRevision = undefined;
     page.current.suspended = false;
-    page.current.resumedState = s;
     openingKakao.current = false;
   }, [s.revision]);
   useEffect(() => {
-    const resumed = page.current.resumedState === s;
-    page.current.resumedState = undefined;
-    // Reading the current snapshot from another page is not a local update.
-    if (resumed) return;
+    if (s.flow === 'BOOT') return;
+    const before = presented.current;
+    const current = snapshot(s);
+    presented.current = current;
     const canWrite = pageGuard();
-    if (canWrite() && s.flow !== 'BOOT' && s.flow !== 'V5-13' && !s.recoveryRequired)
-      persist(snapshot(s), canWrite).catch(() => {
-        if (canWrite()) dispatch({
+    if (before && canWrite() && s.flow !== 'V5-13' && !s.recoveryRequired)
+      persist(current, canWrite, before).catch(error => {
+        if (canWrite() && !handleConflict(error)) dispatch({
           type: 'STORAGE_ERROR',
           message: '기기에 주문 내용을 저장하지 못했어요. 새로고침 전에 저장 공간을 확인해 주세요.',
         });
@@ -106,6 +115,7 @@ export function useApp() {
     s.request,
     s.payment,
     s.order,
+    s.queuedOrders,
   ]);
   useEffect(() => {
     if (s.signal) Device.signal(s.signal);
@@ -147,6 +157,8 @@ export function useApp() {
         try {
           const result = await advancePayment(state, isCurrent);
           if (result) send(result);
+        } catch (error) {
+          if (isCurrent() && !handleConflict(error)) send({ type: 'FAIL', flow: 'P02-V', message: message(error) });
         } finally {
           if (isCurrent()) setCheckingPayment(false);
         }
@@ -187,6 +199,9 @@ export function useApp() {
         dispatch(result);
         return result.type === 'PAYMENT_RESULT' &&
           (!!result.order || ['cancelled', 'failed', 'expired'].includes(result.payment.state));
+      } catch (error) {
+        if (isCurrent() && handleConflict(error)) return true;
+        throw error;
       } finally {
         if ((announceCheck || read.manual) && isCurrent())
           setKakaoCheckStatus(checked ? 'checked' : 'unavailable');
@@ -302,7 +317,8 @@ export function useApp() {
     completing.current = true;
     setBusy(true);
     try {
-      await persist(snapshot(state));
+      const current = snapshot(state);
+      await persist(current, isCurrent, current, true);
       if (!isCurrent()) return;
       const connection = payment.connection ?? state.request?.connection ?? state.settings;
       const response = await api.complete(connection, payment.id, result);
@@ -311,7 +327,7 @@ export function useApp() {
       const action = await paymentResult(connection, payment.connection ? { ...response, connection: payment.connection } : response);
       if (isCurrent()) dispatch(action);
     } catch (e) {
-      if (isCurrent()) dispatch({ type: 'FAIL', flow: 'P02-V', message: message(e) });
+      if (isCurrent() && !handleConflict(e)) dispatch({ type: 'FAIL', flow: 'P02-V', message: message(e) });
     } finally {
       completing.current = false;
       setBusy(false);
@@ -324,7 +340,7 @@ export function useApp() {
       live.current.payment?.id === state.payment?.id && canOpenKakaoPayment(live.current);
     return openKakaoCheckout(state, openingKakao, isCurrent, error => {
       dispatch({ type: 'STORAGE_ERROR', message: error });
-    });
+    }).catch(error => { if (currentPage()) handleConflict(error); });
   }
 
   function finishPickup() {
@@ -334,7 +350,7 @@ export function useApp() {
       if (!currentPage() || live.current.flow !== state.flow || live.current.order?.id !== state.order?.id) return;
       dispatch(action);
       if (action.type === 'PICKUP_COMPLETE') window.speechSynthesis?.cancel();
-    }, currentPage);
+    }, currentPage).catch(error => { if (currentPage()) handleConflict(error); });
   }
 
   return {
@@ -369,8 +385,9 @@ export async function savePickup(
   setBusy(true);
   try {
     try {
-      await persist(snapshot(finished), canWrite);
-    } catch {
+      await persist(snapshot(finished), canWrite, snapshot(state), true);
+    } catch (error) {
+      if (error instanceof SnapshotConflict) throw error;
       dispatch({
         type: 'STORAGE_ERROR',
         message: '픽업 완료를 저장하지 못했어요. 저장 공간을 확인한 뒤 다시 눌러 주세요.',

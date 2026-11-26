@@ -21,7 +21,10 @@ const approved: Payment = { ...ready, state: 'approved', orderId: order.id };
 const server = { ...settings, mode: 'server' as const, serverUrl: 'https://mvp.test' };
 const cartState: State = { ...initial, flow: 'V5-08', settings: server, cart, stores, products, storeId: store.id };
 const newCheckout = () => reduce(cartState, { type: 'CHECKOUT', key: 'checkout-key' });
-const check = (state: State) => advancePayment(state, () => true);
+const check = async (state: State) => {
+  if (state.flow === 'V5-09') await persist(snapshot(state));
+  return advancePayment(state, () => true);
+};
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
 const fetchMock = vi.fn();
 
@@ -45,7 +48,7 @@ test('a mock payment with a null redirect can be prepared and resumed after relo
   const prepared = reduce(started, (await check(started))!);
   expect(prepared).toMatchObject({ flow: 'PAYMENT_EXTERNAL', payment });
 
-  await persist(snapshot(prepared));
+  await persist(snapshot(prepared), () => true, snapshot(started));
   const restored = reduce(initial, { type: 'HYDRATE', snapshot: await readSnapshot(), stores, products });
   expect(restored).toMatchObject({ flow: 'P02-V', recoveryRequired: false, payment });
   fetchMock.mockClear().mockResolvedValueOnce(json(payment));
@@ -137,6 +140,7 @@ test.each([
 
 test('a late quote after the screen becomes inactive cannot initiate payment', async () => {
   const state = newCheckout();
+  await persist(snapshot(state));
   let current = true;
   fetchMock.mockImplementationOnce(async () => {
     current = false;

@@ -333,6 +333,14 @@ test('a locked payment keeps recovery instructions visible and cannot resume or 
   expect(html).not.toContain('기존 결제 이어하기');
 });
 
+test('provides one main landmark containing the title on entry, payment and pickup screens', () => {
+  for (const flow of ['START', 'P02-V', 'V5-13'] as const) {
+    const html = render(flow);
+    expect(html.match(/role="main"/g)).toHaveLength(1);
+    expect(html).toMatch(/role="main"[^>]*>[\s\S]*?<h1[\s>]/);
+  }
+});
+
 test('menu pagination names the actual remaining count', () => {
   const results = Array.from({ length: 7 }, (_, index) => ({
     ...products[0], id: `latte-${index}`, name: `카페라테 ${index}`,

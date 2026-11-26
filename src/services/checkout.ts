@@ -3,7 +3,7 @@ import { snapshot, type Action } from '../core/flow';
 import { isOrder, isPayment } from '../core/savedData';
 import { KAKAO_TEST_PROVIDER, type Connection, type Payment, type State } from '../core/types';
 import * as api from './api';
-import { persist } from './storage';
+import { persist, SnapshotConflict } from './storage';
 import * as Device from '../native/browserDevice';
 import { paymentChannel } from '../native/paymentChannel';
 
@@ -34,8 +34,10 @@ export async function openKakaoCheckout(
   let leaving = false;
   try {
     try {
-      await persist(snapshot(state), isCurrent);
-    } catch {
+      const current = snapshot(state);
+      await persist(current, isCurrent, current, true);
+    } catch (error) {
+      if (error instanceof SnapshotConflict) throw error;
       if (isCurrent()) showError('결제 복구 정보를 저장하지 못했어요. 다시 시도해 주세요.');
       return;
     }
@@ -43,6 +45,7 @@ export async function openKakaoCheckout(
     Device.openKakaoPayment(payment.redirect, connection.serverUrl, payment.id, channel);
     leaving = true;
   } catch (error) {
+    if (error instanceof SnapshotConflict) throw error;
     if (isCurrent()) showError(message(error));
   } finally {
     if (!leaving) opening.current = false;
@@ -92,8 +95,9 @@ export async function advancePayment(
     if (kakao && payment.state === 'ready') {
       if (!payment.redirect) throw new Error('카카오페이 결제창을 확인하지 못했어요.');
       try {
-        await persist(snapshot({ ...state, payment }), isCurrent);
-      } catch {
+        await persist(snapshot({ ...state, payment }), isCurrent, snapshot(state), true);
+      } catch (error) {
+        if (error instanceof SnapshotConflict) throw error;
         throw new Error('결제 복구 정보를 저장하지 못했어요. 다시 확인해 주세요.');
       }
     }
@@ -116,7 +120,8 @@ export async function advancePayment(
     if (!payment) {
       // Only replay a request without a payment ID after an explicit retry.
       if (!request || (!preparing && !state.retryVerification)) return;
-      await persist(snapshot(state), isCurrent);
+      const current = snapshot(state);
+      await persist(current, isCurrent, current, true);
       if (!isCurrent()) return;
       if (preparing) {
         const quote = await api.revalidate(connection, request);
@@ -153,6 +158,7 @@ export async function advancePayment(
     verifyQuote(payment);
     if (isCurrent()) return await paymentResult(connection, payment);
   } catch (error) {
+    if (error instanceof SnapshotConflict) throw error;
     if (!isCurrent()) return;
     if (preparing && request && !payment &&
         error instanceof api.ApiError && error.reason === 'PRICE_CHANGED') {

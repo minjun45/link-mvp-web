@@ -4,7 +4,7 @@ import { initial, reduce, settings, snapshot, type Action } from '../src/core/fl
 import type { Order, Payment, Snapshot, State } from '../src/core/types';
 import { complete, getOrder, products, stores } from '../src/services/api';
 import { advancePayment, paymentResult } from '../src/services/checkout';
-import { persist, readSnapshot } from '../src/services/storage';
+import { persist, readSnapshot, SnapshotConflict } from '../src/services/storage';
 import { savePickup } from '../src/services/useApp';
 
 const store = stores[0];
@@ -17,7 +17,7 @@ const order: Order = {
 };
 const payment: Payment = { id: 'pending-2', state: 'ready', provider: 'offline', snapshot: receipt };
 const request = { key: 'request-2', storeId: store.id, items: [line], expected: receipt };
-const storageKey = 'link-web.state.v1';
+const storageKey = 'link-web.state.v2';
 let items: Map<string, string>;
 
 beforeEach(() => {
@@ -31,7 +31,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 const hydrate = (saved?: unknown) => reduce(initial, { type: 'HYDRATE', snapshot: saved, stores, products });
 async function reload(state: State | Snapshot) {
-  await persist(state);
+  await persist(snapshot(state), () => true, snapshot(hydrate(await readSnapshot())));
   return hydrate(await readSnapshot());
 }
 
@@ -40,7 +40,7 @@ test.each(['received', 'preparing', 'ready'] as const)(
   async status => {
     const active = { ...order, status };
     const restored = await reload(snapshot({
-      ...initial, flow: 'V5-10', order: active, history: { [store.id]: active },
+      ...initial, order: active, history: { [store.id]: active },
     }));
     expect(restored).toMatchObject({
       flow: 'V5-11', order: { status, number: 'A-0042', snapshot: receipt }, orderStatusChecked: false,
@@ -79,6 +79,7 @@ test('the local demo keeps one receipt through payment and restarts at every pic
     state = reduce(state, { type: 'ADD', id: line.id });
     state = reduce(state, { type: 'NAV', flow: 'V5-08' });
     state = reduce(state, { type: 'CHECKOUT', key: 'local-demo' });
+    await persist(snapshot(state));
     state = reduce(state, (await advancePayment(state, () => true))!);
     expect(state.flow).toBe('PAYMENT_EXTERNAL');
 
@@ -210,6 +211,7 @@ test('double pickup clicks save once and keep unrelated orders and pending payme
     ...initial, flow: 'V5-12', order: ready, history: { [store.id]: ready },
     queuedOrders: [waiting], request, payment,
   };
+  await persist(snapshot(state));
   const write = vi.spyOn(localStorage, 'setItem');
   const dispatch = vi.fn((action: Action) => { state = reduce(state, action); });
   const busy = vi.fn();
@@ -272,4 +274,49 @@ test.each([
   expect(state.cart).toEqual([line]);
   expect(reduce(state, { type: 'CHECKOUT', key: 'new' }).request?.key).not.toBe('new');
   if (state.order) expect(reduce(state, { type: 'NAV', flow: 'V5-11' }).order).toBe(state.order);
+});
+
+test('independent tab updates preserve active commerce and merge only the changed settings', async () => {
+  const stale = snapshot(initial);
+  const started = { ...stale, cart: [line], storeId: store.id, request, payment };
+  await Promise.all([
+    persist(started, () => true, stale),
+    persist({ ...stale, settings: { ...settings, large: true } }, () => true, stale),
+    persist({ ...stale, settings: { ...settings, contrast: true } }, () => true, stale),
+  ]);
+  expect(await readSnapshot()).toMatchObject({
+    request, payment, cart: [line], settings: { large: true, contrast: true },
+  });
+  await expect(persist({ ...stale, cart: [{ ...line, quantity: 2 }] }, () => true, stale))
+    .rejects.toBeInstanceOf(SnapshotConflict);
+  expect(await readSnapshot()).toMatchObject({ request, payment, cart: [line] });
+});
+
+test('a stale checkout or order poll cannot overwrite a picked-up order or its history', async () => {
+  const ready = { ...order, status: 'ready' as const };
+  const opening = snapshot({ ...initial, payment, request, cart: [line] });
+  await persist(opening);
+  const approved = { ...opening, payment: undefined, request: undefined, cart: [],
+    order: ready, history: { [store.id]: ready } };
+  await persist(approved, () => true, opening);
+  const finished = { ...approved, order: undefined };
+  await persist(finished, () => true, approved, true);
+  await expect(persist(opening, () => true, opening, true)).rejects.toBeInstanceOf(SnapshotConflict);
+  await expect(persist({ ...approved, order: { ...ready, status: 'preparing' } }, () => true, approved))
+    .rejects.toBeInstanceOf(SnapshotConflict);
+  await persist({ ...approved, settings: { ...settings, dark: true } }, () => true, approved);
+  expect(hydrate(await readSnapshot())).toMatchObject({
+    flow: 'START', order: undefined, history: approved.history, settings: { dark: true },
+  });
+});
+
+test('migrates a legacy pending order and ignores later writes by the old bundle', async () => {
+  const previous = snapshot({ ...initial, cart: [line], payment, request });
+  const legacy = 'link-web.state.v1';
+  items.set(legacy, JSON.stringify(previous));
+  const before = snapshot(hydrate(await readSnapshot()));
+  await persist({ ...before, settings: { ...settings, staffHelp: true } }, () => true, before);
+  expect(JSON.parse(items.get(legacy)!)).toEqual(JSON.parse(JSON.stringify(previous)));
+  items.set(legacy, JSON.stringify(snapshot(initial)));
+  expect(await readSnapshot()).toMatchObject({ cart: [line], payment, request, settings: { staffHelp: true } });
 });

@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import type { Payment, Quote } from '../src/core/types.ts';
-import { token } from './kakaopay-provider.ts';
+import { READY_EXPIRY_GRACE_MS, READY_WINDOW_MS, token } from './kakaopay-provider.ts';
 
 type DatabasePayment = {
   id: string;
@@ -118,22 +118,43 @@ export class PaymentDatabase {
     return insert.changes ? this.byId(owner, id) : undefined;
   }
 
-  storeReady(id: string, response: { tid?: string; pc?: string; mobile?: string }) {
+  storeReady(id: string, response: { tid?: string; pc?: string; mobile?: string }, readyAt?: number) {
     const tid = response.tid ?? null;
     const state = tid && (response.pc || response.mobile) ? 'ready' : 'failed';
     this.db.prepare(`
-      UPDATE payments SET tid = ?, pc = ?, mobile = ?, state = ?
+      UPDATE payments SET tid = ?, pc = ?, mobile = ?, state = ?, created = COALESCE(?, created)
       WHERE id = ? AND state = 'preparing' AND tid IS NULL AND pc IS NULL AND mobile IS NULL
         AND attempted = 0 AND aid IS NULL AND mismatch = 0
         AND NOT EXISTS (SELECT 1 FROM orders WHERE orders.paymentId = payments.id)
-    `).run(tid, response.pc ?? null, response.mobile ?? null, state, id);
+    `).run(tid, response.pc ?? null, response.mobile ?? null, state, state === 'ready' ? readyAt ?? null : null, id);
   }
 
-  claimApproval(id: string) {
+  claimApproval(id: string, now: () => number) {
+    // Take the clock reading after acquiring the SQLite write lock.
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const claimed = this.db.prepare(`
+        UPDATE payments SET attempted = 1, state = 'approving'
+        WHERE id = ? AND created > ? AND state IN ('ready', 'review')
+          AND attempted = 0 AND aid IS NULL AND mismatch = 0
+          AND tid IS NOT NULL AND (pc IS NOT NULL OR mobile IS NOT NULL)
+          AND NOT EXISTS (SELECT 1 FROM orders WHERE orders.paymentId = payments.id)
+      `).run(id, now() - READY_WINDOW_MS).changes === 1;
+      this.db.exec('COMMIT');
+      return claimed;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  expireUnapproved(id: string, tid: string, now: number) {
     return this.db.prepare(`
-      UPDATE payments SET attempted = 1, state = 'approving'
-      WHERE id = ? AND attempted = 0 AND tid IS NOT NULL AND (pc IS NOT NULL OR mobile IS NOT NULL) AND state IN (${waiting})
-    `).run(id).changes === 1;
+      UPDATE payments SET state = 'expired'
+      WHERE id = ? AND tid = ? AND created <= ? AND state IN ('ready', 'review')
+        AND attempted = 0 AND aid IS NULL AND mismatch = 0
+        AND NOT EXISTS (SELECT 1 FROM orders WHERE orders.paymentId = payments.id)
+    `).run(id, tid, now - READY_WINDOW_MS - READY_EXPIRY_GRACE_MS).changes === 1;
   }
 
   storeApproval(id: string, aid: string | null, mismatch: boolean) {
@@ -141,7 +162,11 @@ export class PaymentDatabase {
   }
 
   setOutcome(id: string, state: 'ready' | 'review' | 'cancelled' | 'failed') {
-    this.db.prepare(`UPDATE payments SET state = ? WHERE id = ? AND state IN (${waiting})`).run(state, id);
+    this.db.prepare(`
+      UPDATE payments SET state = ? WHERE id = ? AND state IN (${waiting})
+        AND (? = 'review' OR mismatch = 0)
+        AND (? <> 'ready' OR (attempted = 0 AND aid IS NULL))
+    `).run(state, id, state, state);
   }
 
   finish(owner: string, id: string, created: number) {

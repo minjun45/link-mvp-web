@@ -129,7 +129,7 @@ export function createKakaoPayTestServer(options: KakaoOptions) {
     if (pgToken && !tx.approvalAttempted) {
       tx.approvalAttempted = true;
       const result = await provider.approve(known, pgToken);
-      if (result.kind === 'verified') tx.aid = result.aid;
+      if ('aid' in result && result.aid) tx.aid = result.aid;
       if (result.kind === 'mismatch') tx.approvalMismatch = true;
     }
     const order = await provider.order(known, tx.aid);

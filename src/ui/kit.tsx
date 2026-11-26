@@ -94,7 +94,7 @@ export function Button({
   icon,
 }: {
   label: string;
-  onPress: () => void;
+  onPress: React.MouseEventHandler<HTMLButtonElement>;
   primary?: boolean;
   selected?: boolean;
   disabled?: boolean;

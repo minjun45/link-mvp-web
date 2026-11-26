@@ -220,7 +220,7 @@ export default function App() {
   } catch (e) {
     cartError = e instanceof Error ? e.message : '';
   }
-  const help = () => helpCard(staffHelpText(s, cartQuote));
+  const help = (event: React.MouseEvent<HTMLButtonElement>) => helpCard(staffHelpText(s, cartQuote), event.currentTarget);
   const nav = (flow: typeof s.flow) => d({ type: 'NAV', flow });
   const menu = () => nav(s.products.length > 20 ? 'V5-M1' : 'V5-05');
   const checkout = (reorder = false) =>
@@ -1765,7 +1765,7 @@ export default function App() {
         </View>
         <div className="scroll-area">
           <div className="screen-scroll" ref={scroll}>
-            <div className="screen-content" ref={content}>
+            <div className="screen-content" ref={content} role="main">
               {hero && (
                 <Icon
                   name={hero}

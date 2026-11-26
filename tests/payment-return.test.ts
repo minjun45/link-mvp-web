@@ -51,7 +51,7 @@ test('awaits the storage lock before navigating the same tab and ignores a doubl
   const setItem = vi.fn();
   vi.stubGlobal('window', { open, location: { origin: KAKAO_TEST_ORIGIN, assign } });
   vi.stubGlobal('navigator', { userAgent: 'iPhone' });
-  vi.stubGlobal('localStorage', { setItem });
+  vi.stubGlobal('localStorage', { setItem, getItem: () => JSON.stringify(snapshot(state)) });
   const pending = deferred<void>();
   const active = serial(() => pending.promise);
   const opening = { current: false };
@@ -78,7 +78,8 @@ test('blocks a missing mobile channel, a storage failure and a forged checkout a
   const setItem = vi.fn().mockImplementationOnce(() => { throw new Error('storage full'); });
   vi.stubGlobal('window', { open, location: { origin: KAKAO_TEST_ORIGIN, assign } });
   vi.stubGlobal('navigator', { userAgent: 'Android' });
-  vi.stubGlobal('localStorage', { setItem });
+  let stored = snapshot(state);
+  vi.stubGlobal('localStorage', { setItem, getItem: () => JSON.stringify(stored) });
   const report = vi.fn();
   const opening = { current: false };
 
@@ -88,7 +89,9 @@ test('blocks a missing mobile channel, a storage failure and a forged checkout a
   await openKakaoCheckout(state, opening, () => true, report);
   expect(report).toHaveBeenLastCalledWith('결제 복구 정보를 저장하지 못했어요. 다시 시도해 주세요.');
   expect(opening.current).toBe(false);
-  await openKakaoCheckout({ ...state, payment: { ...payment, redirect: 'https://other.test' } },
+  const forged = { ...state, payment: { ...payment, redirect: 'https://other.test' } };
+  stored = snapshot(forged);
+  await openKakaoCheckout(forged,
     opening, () => true, report);
   expect(report).toHaveBeenLastCalledWith('카카오페이 결제창 주소를 확인할 수 없어요.');
   expect(assign).not.toHaveBeenCalled();

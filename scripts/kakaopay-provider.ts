@@ -12,6 +12,8 @@ const REDIRECT_ORIGINS = new Set([
   'https://online-payment.kakaopay.com',
 ]);
 export const READY_WINDOW_MS = 15 * 60_000;
+// Legacy rows used the time just before the ready call (8s timeout).
+export const READY_EXPIRY_GRACE_MS = 10_000;
 
 type Fields = Record<string, unknown>;
 type Operation = 'ready' | 'approve' | 'order';
@@ -74,6 +76,15 @@ function sameOrder(data: Fields, trade: KnownTrade) {
 
 function sameTotal(data: Fields, trade: KakaoTrade) {
   return fields(data.amount).total === trade.total && data.quantity === trade.quantity && data.item_name === trade.item;
+}
+
+function conflictingFields(data: Fields, trade: KnownTrade) {
+  return [
+    [data.cid, CID], [data.tid, trade.tid],
+    [data.partner_order_id, trade.orderId], [data.partner_user_id, trade.userId],
+    [fields(data.amount).total, trade.total], [data.quantity, trade.quantity], [data.item_name, trade.item],
+  ].some(([actual, expected]) => actual != null && actual !== expected) ||
+    (data.amount != null && (typeof data.amount !== 'object' || Array.isArray(data.amount)));
 }
 
 export function createKakaoPayClient({ devKey, transport = fetch, timeoutMs = 8_000, report }: KakaoOptions) {
@@ -140,21 +151,25 @@ export function createKakaoPayClient({ devKey, transport = fetch, timeoutMs = 8_
       const { data, status } = response;
       if (sameOrder(data, trade) && sameTotal(data, trade) && isIdentifier(data.aid) && isTimestamp(data.approved_at))
         return { kind: 'verified', aid: data.aid } as const;
-      report?.({ operation: 'approve', reason: 'response-mismatch', status });
-      return { kind: 'mismatch' } as const;
+      if (conflictingFields(data, trade) || (data.aid != null && !isIdentifier(data.aid))) {
+        report?.({ operation: 'approve', reason: 'response-mismatch', status });
+        return { kind: 'mismatch' } as const;
+      }
+      report?.({ operation: 'approve', reason: 'response-format', status });
+      return { kind: 'unknown', aid: isIdentifier(data.aid) ? data.aid : undefined } as const;
     },
     async order(trade: KnownTrade, aid?: string) {
       const response = await call('order', { tid: trade.tid });
       if (!response) return 'unknown';
       const { data, status } = response;
-      if (!sameOrder(data, trade)) {
+      if (!sameOrder(data, trade) || conflictingFields(data, trade)) {
         report?.({ operation: 'order', reason: 'response-mismatch', status });
         return 'unknown';
       }
+      const actions = Array.isArray(data.payment_action_details) ? data.payment_action_details.map(fields) : [];
       switch (data.status) {
         case 'SUCCESS_PAYMENT': {
-          const actions: unknown[] = Array.isArray(data.payment_action_details) ? data.payment_action_details : [];
-          const payment = actions.map(fields).some(action =>
+          const payment = actions.some(action =>
             action.payment_action_type === 'PAYMENT' && action.amount === trade.total &&
             isIdentifier(action.aid) && (!aid || action.aid === aid));
           if (sameTotal(data, trade) && isTimestamp(data.approved_at) && payment) return 'approved';
@@ -164,12 +179,21 @@ export function createKakaoPayClient({ devKey, transport = fetch, timeoutMs = 8_
         case 'QUIT_PAYMENT':
         case 'CANCEL_PAYMENT': return 'cancelled';
         case 'FAIL_PAYMENT': return 'failed';
-        case 'READY': return 'ready';
+        case 'READY':
         case 'SEND_TMS':
         case 'OPEN_PAYMENT':
         case 'SELECT_METHOD':
         case 'ARS_WAITING':
-        case 'AUTH_PASSWORD': return 'pending';
+        case 'AUTH_PASSWORD':
+        case 'FAIL_AUTH_PASSWORD':
+          if (data.approved_at != null || data.aid != null ||
+              (data.payment_action_details != null && !Array.isArray(data.payment_action_details)) ||
+              actions.some(action => action.payment_action_type === 'PAYMENT')) {
+            report?.({ operation: 'order', reason: 'response-mismatch', status });
+            return 'unknown';
+          }
+          return data.status === 'READY' ? 'ready' :
+            data.status === 'FAIL_AUTH_PASSWORD' ? 'auth-failed' : 'pending';
         default:
           report?.({ operation: 'order', reason: 'response-format', status });
           return 'unknown';

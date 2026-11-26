@@ -137,7 +137,7 @@ export function NavigationRow({
   icon?: IconName;
   photo?: boolean;
   tag?: string;
-  onPress: () => void;
+  onPress: React.MouseEventHandler<HTMLButtonElement>;
   disabled?: boolean;
 }) {
   const theme = useContext(ThemeContext);

@@ -61,6 +61,14 @@ export function catalogConnection(state: State): Connection {
   return mode === 'server' ? { mode, serverUrl } : { mode };
 }
 
+function kakaoRetryConnection(state: State) {
+  const connection = state.payment?.connection;
+  if (state.kakaoTest && connection?.mode === KAKAO_TEST_PROVIDER &&
+      connection.serverUrl === (state.kakaoOrigin ?? KAKAO_TEST_ORIGIN) &&
+      state.payment && ['cancelled', 'failed', 'expired'].includes(state.payment.state))
+    return connection;
+}
+
 export function lastOrderForStore(state: State) {
   if (!state.storeId) return;
   return state.history[orderHistoryKey(state.storeId, catalogConnection(state))] ?? state.history[state.storeId];
@@ -637,7 +645,7 @@ export function reduce(s: State, a: Action): State {
           payment: undefined,
           cart,
           request: {
-            connection: catalogConnection(s),
+            connection: (a.type === 'RETRY_CHECKOUT' ? kakaoRetryConnection(s) : undefined) ?? catalogConnection(s),
             key: a.key,
             storeId: s.storeId!,
             items: cart.map(l => ({ ...l, options: { ...l.options } })),
@@ -726,9 +734,7 @@ export function reduce(s: State, a: Action): State {
       case 'RETRY_PAYMENT': {
         if (!['P01-E2', 'P02-C', 'P02-F', 'P02-T'].includes(s.flow) || s.recoveryRequired) return s;
         // A restored demo checkout can coexist with a legacy server setting.
-        const resumeKakaoCart = s.payment?.failureReason === 'preparation' && s.kakaoTest &&
-          s.payment.connection?.mode === KAKAO_TEST_PROVIDER &&
-          s.payment.connection.serverUrl === (s.kakaoOrigin ?? KAKAO_TEST_ORIGIN);
+        const resumeKakaoCart = !!kakaoRetryConnection(s);
         const cleared: State = { ...s, payment: undefined, request: undefined,
           discovery: resumeKakaoCart ? 'demo' : s.discovery };
         return s.order ? reduce(cleared, { type: 'OPEN_ORDER' }) : goto(cleared, 'V5-08');
@@ -793,7 +799,7 @@ export function reduce(s: State, a: Action): State {
     };
   }
 }
-export function snapshot(s: State): Snapshot {
+export function snapshot(s: Snapshot): Snapshot {
   return {
     onboarded: s.onboarded,
     settings: s.settings,

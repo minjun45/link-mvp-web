@@ -11,7 +11,7 @@ import catalog from '../src/data/catalog.json' with { type: 'json' };
 import { PaymentDatabase, type DatabasePayment } from './kakaopay-db.ts';
 import { assertQaNode, qaSettings, verifyQaDisk } from './qa-config.ts';
 import { qaAccess } from './qa-access.ts';
-import { createKakaoPayClient, kakaoRedirect, kakaoReturn, loadDevKey, localAppData, outsideRepo, READY_WINDOW_MS, type KakaoOptions } from './kakaopay-provider.ts';
+import { createKakaoPayClient, kakaoRedirect, kakaoReturn, loadDevKey, localAppData, outsideRepo, READY_EXPIRY_GRACE_MS, READY_WINDOW_MS, type KakaoOptions } from './kakaopay-provider.ts';
 
 const COOKIE = 'link_kakaopay_session';
 const ID = /^[a-f0-9]{64}$/;
@@ -65,6 +65,19 @@ ${status === 200 ? '' : '<p role="alert">접속 키를 확인한 뒤 다시 시�
 
 function redirect(res: ServerResponse, location: string) {
   res.writeHead(303, { Location: location }).end();
+}
+
+const interruptedApproval = '/checkout-unavailable?approval=interrupted';
+
+class ApprovalStartUnavailable extends Error {}
+
+function approvalRecoveryPage(res: ServerResponse) {
+  const title = '결제 처리를 이어가지 못했어요';
+  return html(res, 503, `<!doctype html><html lang="ko"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${title}</title><main><h1>${title}</h1>
+<p>주문하던 탭에서 같은 결제의 결과를 다시 확인해 주세요. ‘기존 결제 이어하기’가 보이면 같은 결제창을 다시 열 수 있어요.</p>
+<a href="/">LINK 주문 화면 열기</a></main></html>`);
 }
 
 class RequestError extends Error {
@@ -180,19 +193,27 @@ export function createKakaoPayLocalServer({
     if (!tx.tid || !['ready', 'approving', 'review'].includes(tx.state)) return;
     const known = { ...trade(tx), tid: tx.tid };
     if (pgToken && !tx.attempted && now() - tx.created < READY_WINDOW_MS) {
-      qa?.checkDisk();
-      const release = gatewaySlot('approve', tx.owner);
+      let release: (() => void) | undefined;
+      let claimed: boolean;
       try {
-        if (database.claimApproval(tx.id)) {
+        qa?.checkDisk();
+        release = gatewaySlot('approve', tx.owner);
+        claimed = database.claimApproval(tx.id, now);
+      } catch {
+        release?.();
+        throw new ApprovalStartUnavailable();
+      }
+      try {
+        if (claimed) {
           const result = await provider.approve(known, pgToken);
-          database.storeApproval(tx.id, result.kind === 'verified' ? result.aid : null, result.kind === 'mismatch');
+          database.storeApproval(tx.id, ('aid' in result ? result.aid : undefined) ?? null, result.kind === 'mismatch');
         }
       } finally {
         release();
       }
     }
     const saved = database.byId(tx.owner, tx.id);
-    if (!saved) return;
+    if (!saved || !['ready', 'approving', 'review'].includes(saved.state)) return;
     const release = gatewaySlot('inquiry', tx.owner);
     const outcome = await provider.order(known, saved.aid ?? undefined).finally(release);
     if (outcome === 'approved' && saved.attempted && !saved.mismatch) {
@@ -201,6 +222,10 @@ export function createKakaoPayLocalServer({
     } else if (outcome === 'cancelled' || outcome === 'failed') {
       database.setOutcome(tx.id, outcome);
     } else {
+      const unapproved = outcome === 'ready' || outcome === 'pending' || outcome === 'auth-failed';
+      const checkedAt = now();
+      if (unapproved && checkedAt - saved.created >= READY_WINDOW_MS + READY_EXPIRY_GRACE_MS &&
+          database.expireUnapproved(saved.id, known.tid, checkedAt)) return;
       const canResume = (outcome === 'ready' || outcome === 'pending') && !!(saved.pc || saved.mobile) &&
         !saved.attempted && now() - saved.created < READY_WINDOW_MS && !pgToken;
       database.setOutcome(tx.id, canResume ? 'ready' : 'review');
@@ -256,7 +281,10 @@ export function createKakaoPayLocalServer({
     const item = priced.items[0].name + (priced.items.length > 1 ? ` 외 ${priced.items.length - 1}종` : '');
     qa?.checkDisk();
     const pending = database.pending(owner);
-    if (pending && recoverUnopened(pending).state !== 'failed') {
+    if (pending && recoverUnopened(pending).state !== 'failed' &&
+        now() - pending.created >= READY_WINDOW_MS + READY_EXPIRY_GRACE_MS && !pending.attempted)
+      await refresh(pending);
+    if (database.pending(owner)) {
       error(res, 409, '이전에 시작한 결제 결과를 먼저 확인해 주세요.');
       return;
     }
@@ -273,7 +301,7 @@ export function createKakaoPayLocalServer({
       try {
         // The TID and usable URL reach durable storage before the checkout link is exposed.
         const result = await provider.ready(trade(tx), origin, tx.callbackId);
-        database.storeReady(tx.id, result);
+        database.storeReady(tx.id, result, now());
         json(res, 200, view(database.byId(owner, tx.id)!));
       } finally {
         preparing.delete(tx.id);
@@ -338,14 +366,18 @@ export function createKakaoPayLocalServer({
         return redirect(res, '/checkout-unavailable');
       try {
         await refresh(tx, callback.pgToken);
-      } finally {
-        redirect(res, sessionId === tx.owner ? '/' : '/payment-return');
+      } catch (failure) {
+        if (failure instanceof ApprovalStartUnavailable) return redirect(res, interruptedApproval);
+        // The claim may already be durable. The original tab can check the same transaction.
       }
-      return;
+      return redirect(res, sessionId === tx.owner ? '/' : '/payment-return');
     }
 
-    if (req.method === 'GET' && (path === '/payment-return' || path === '/checkout-unavailable'))
+    if (req.method === 'GET' && (path === '/payment-return' || path === '/checkout-unavailable')) {
+      if (path === '/checkout-unavailable' && url.searchParams.get('approval') === 'interrupted')
+        return approvalRecoveryPage(res);
       return resultPage(res, path === '/payment-return');
+    }
 
     if (req.method === 'GET' && path.startsWith('/checkout/')) {
       if (!allowed) return redirect(res, '/qa-access');

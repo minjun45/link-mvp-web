@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Button, T, type Theme } from './kit';
 
 type Choice = { text: string; onPress?: () => void; keepOpen?: boolean };
-type Message = { title: string; text: string; choices: Choice[]; onCancel?: () => void; large?: boolean };
+type Message = { title: string; text: string; choices: Choice[]; onCancel?: () => void; large?: boolean; restoreFocus?: () => void };
 
 export function useAppDialog(theme: Theme) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -31,8 +31,14 @@ export function useAppDialog(theme: Theme) {
   // No "안내 듣기" button: the browser's own voice talked over TalkBack and
   // VoiceOver. Screen reader users hear the card from its title down, and
   // staff read the large text on screen.
-  function helpCard(text: string) {
+  function helpCard(text: string, opener: HTMLButtonElement) {
+    const screen = opener.closest('[data-flow]')?.getAttribute('data-flow');
     setMessage({
+      restoreFocus: () => {
+        // Some browsers do not focus a button on pointer click before showModal().
+        if (opener.isConnected && opener.closest('[data-flow]')?.getAttribute('data-flow') === screen)
+          opener.focus({ preventScroll: true });
+      },
       title: '주변 사람에게 도움 요청',
       text,
       large: true,
@@ -51,7 +57,11 @@ export function useAppDialog(theme: Theme) {
         ref.current?.close();
         message?.onCancel?.();
       }}
-      onClose={() => setMessage(null)}
+      onClose={event => {
+        if (event.currentTarget.open) return;
+        message?.restoreFocus?.();
+        setMessage(null);
+      }}
     >
       {message && (
         <div style={{ display: 'grid', gap: 12 }}>
