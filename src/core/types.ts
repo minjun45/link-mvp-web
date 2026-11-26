@@ -63,7 +63,7 @@ export type Payment = {
   provider: string;
   snapshot: Quote;
   orderId?: string;
-  redirect?: string;
+  redirect?: string | null;
   created?: number;
 };
 export type Order = {

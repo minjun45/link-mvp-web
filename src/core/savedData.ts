@@ -56,7 +56,7 @@ export function isPayment(value: unknown): value is Payment {
   return isRecord(value) && isId(value.id) && paymentStates.has(value.state) &&
     isId(value.provider) && isQuote(value.snapshot) &&
     (value.orderId === undefined || isId(value.orderId)) &&
-    (value.redirect === undefined || isString(value.redirect)) &&
+    (value.redirect == null || isString(value.redirect)) &&
     (value.created === undefined || isAmount(value.created));
 }
 

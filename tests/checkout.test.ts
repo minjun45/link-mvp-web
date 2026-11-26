@@ -4,6 +4,7 @@ import { initial, reduce, settings, snapshot } from '../src/core/flow';
 import type { Order, Payment, State } from '../src/core/types';
 import { products, stores } from '../src/services/api';
 import { advancePayment, paymentResult } from '../src/services/checkout';
+import { persist, readSnapshot } from '../src/services/storage';
 
 const store = stores[0];
 const item = products[0];
@@ -35,6 +36,26 @@ beforeEach(() => {
 afterEach(() => {
   fetchMock.mockReset();
   vi.unstubAllGlobals();
+});
+
+test('a mock payment with a null redirect can be prepared and resumed after reload', async () => {
+  const payment = { ...ready, provider: 'mock', redirect: null };
+  fetchMock.mockResolvedValueOnce(json(receipt)).mockResolvedValueOnce(json(payment, 201));
+  const started = newCheckout();
+  const prepared = reduce(started, (await check(started))!);
+  expect(prepared).toMatchObject({ flow: 'PAYMENT_EXTERNAL', payment });
+
+  await persist(snapshot(prepared));
+  const restored = reduce(initial, { type: 'HYDRATE', snapshot: await readSnapshot(), stores, products });
+  expect(restored).toMatchObject({ flow: 'P02-V', recoveryRequired: false, payment });
+  fetchMock.mockClear().mockResolvedValueOnce(json(payment));
+  const verified = reduce(restored, (await check(restored))!);
+  expect(fetchMock.mock.calls.map(([url, init]) => [init.method, url])).toEqual([
+    ['GET', 'https://mvp.test/api/payments/p1'],
+  ]);
+  expect(reduce(verified, { type: 'NAV', flow: 'PAYMENT_EXTERNAL' })).toMatchObject({
+    flow: 'PAYMENT_EXTERNAL', payment,
+  });
 });
 
 test('lost preparation response only replays the original request after a deliberate retry', async () => {
